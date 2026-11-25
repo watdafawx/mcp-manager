@@ -183,7 +183,9 @@ fn server_row(
     ui.horizontal(|ui| {
         let dot = theme::dot(ui, pal.run_state(row.state));
         match &row.last_error {
-            Some(e) if row.state == RunState::Error => dot.on_hover_text(e),
+            Some(e) if matches!(row.state, RunState::Error | RunState::Failed) => {
+                dot.on_hover_text(e)
+            }
             _ => dot.on_hover_text(row.state.label()),
         };
         if ui
@@ -203,8 +205,17 @@ fn server_row(
                     on: !cfg.enabled,
                 });
             }
+            let failed = row.state == RunState::Failed;
             if ui
-                .add_enabled(cfg.enabled, egui::Button::new("Restart").small())
+                .add_enabled(
+                    cfg.enabled,
+                    egui::Button::new(if failed { "Retry" } else { "Restart" }).small(),
+                )
+                .on_hover_text(if failed {
+                    "Stopped after repeated failed starts. Try starting it again."
+                } else {
+                    "Restart the server"
+                })
                 .clicked()
             {
                 jobs.push(Job::Restart(cfg.id.clone()));
@@ -692,6 +703,19 @@ fn form_fields(ui: &mut Ui, form: &mut ServerForm, editing: bool, secrets_visibl
             });
         }
     }
+    form_row(ui, "Start timeout", |ui| {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut form.start_timeout)
+                    .hint_text("30")
+                    .desired_width(60.0),
+            )
+            .on_hover_text(
+                "Seconds the server may take to answer initialize and tools/list. Empty = 30.",
+            );
+            ui.label("seconds");
+        });
+    });
     form_row(ui, "Mode", |ui| {
         egui::ComboBox::from_id_salt("mode")
             .selected_text(match form.mode {

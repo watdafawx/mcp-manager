@@ -68,6 +68,8 @@ pub enum RunState {
     Idle,
     Running,
     Error,
+    /// Failed to start several times in a row; not retried until restarted.
+    Failed,
     Disabled,
     /// Daemon is down; CLI read the config file directly.
     Stopped,
@@ -78,6 +80,7 @@ impl RunState {
         match s {
             "running" => Self::Running,
             "error" => Self::Error,
+            "failed" => Self::Failed,
             "disabled" => Self::Disabled,
             "stopped" => Self::Stopped,
             _ => Self::Idle,
@@ -88,6 +91,7 @@ impl RunState {
             Self::Idle => "idle",
             Self::Running => "running",
             Self::Error => "error",
+            Self::Failed => "failed",
             Self::Disabled => "disabled",
             Self::Stopped => "stopped",
         }

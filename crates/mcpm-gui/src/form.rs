@@ -28,6 +28,8 @@ pub struct ServerForm {
     pub enabled: bool,
     pub pinned: Vec<String>,
     pub harnesses: Vec<String>,
+    /// Seconds to wait for `initialize`/`tools/list`; empty = default.
+    pub start_timeout: String,
 }
 
 impl Default for ServerForm {
@@ -47,6 +49,7 @@ impl Default for ServerForm {
             enabled: true,
             pinned: Vec::new(),
             harnesses: Vec::new(),
+            start_timeout: String::new(),
         }
     }
 }
@@ -72,6 +75,10 @@ impl ServerForm {
             enabled: c.enabled,
             pinned: c.pinned_tools.clone(),
             harnesses: c.harnesses.clone(),
+            start_timeout: c
+                .start_timeout_secs
+                .map(|n| n.to_string())
+                .unwrap_or_default(),
             ..Self::default()
         };
         f.load_transport(&c.transport);
@@ -154,6 +161,12 @@ impl ServerForm {
             mode: self.mode,
             pinned_tools: self.pinned.clone(),
             harnesses: self.harnesses.clone(),
+            start_timeout_secs: self
+                .start_timeout
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n: &u32| *n > 0),
             // The daemon keeps the stored origin on update; new servers have none.
             origin: None,
         })
@@ -221,11 +234,13 @@ mod tests {
             mode: InstanceMode::Session,
             pinned: vec!["a".into()],
             harnesses: vec!["claude".into()],
+            start_timeout: "90".into(),
             ..Default::default()
         };
         let c = f.to_config().unwrap();
         let back = ServerForm::from_config(&c);
         assert_eq!(back.editing.as_deref(), Some("web"));
         assert_eq!(back.to_config().unwrap(), c);
+        assert_eq!(c.start_timeout_secs, Some(90));
     }
 }

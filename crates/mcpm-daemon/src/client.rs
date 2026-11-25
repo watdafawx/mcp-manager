@@ -17,6 +17,13 @@ use tokio::sync::{mpsc, oneshot};
 use crate::rpc::{LATEST_PROTOCOL, TOOLS_LIST_CHANGED};
 
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long `initialize` and the first `tools/list` may take (`startTimeoutSecs`, default 30 s).
+pub fn start_timeout(cfg: &ServerConfig) -> Duration {
+    cfg.start_timeout_secs
+        .filter(|s| *s > 0)
+        .map_or(REQUEST_TIMEOUT, |s| Duration::from_secs(s.into()))
+}
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(120);
 const STDERR_TAIL: usize = 4000;
 
@@ -48,7 +55,7 @@ impl McpClient {
                 cwd,
             } => {
                 let c = StdioClient::spawn(command, args, env, cwd.as_deref(), cb).await?;
-                if let Err(e) = c.initialize().await {
+                if let Err(e) = c.initialize(start_timeout(cfg)).await {
                     c.close();
                     return Err(e);
                 }
@@ -56,7 +63,7 @@ impl McpClient {
             }
             Transport::Http { url, headers } => {
                 let c = HttpClient::new(url, headers, cb)?;
-                c.initialize().await?;
+                c.initialize(start_timeout(cfg)).await?;
                 Ok(McpClient::Http(c))
             }
         }
@@ -78,6 +85,11 @@ impl McpClient {
 
     /// All tools (follows `nextCursor` pagination).
     pub async fn list_tools(&self) -> Result<Vec<Value>> {
+        self.list_tools_within(REQUEST_TIMEOUT).await
+    }
+
+    /// All tools, each page answered within `timeout`.
+    pub async fn list_tools_within(&self, timeout: Duration) -> Result<Vec<Value>> {
         let mut tools = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..50 {
@@ -85,7 +97,7 @@ impl McpClient {
                 Some(c) => json!({ "cursor": c }),
                 None => json!({}),
             };
-            let res = self.request("tools/list", params, REQUEST_TIMEOUT).await?;
+            let res = self.request("tools/list", params, timeout).await?;
             if let Some(arr) = res.get("tools").and_then(Value::as_array) {
                 tools.extend(arr.iter().cloned());
             }
@@ -302,9 +314,8 @@ impl StdioClient {
         })
     }
 
-    async fn initialize(&self) -> Result<()> {
-        self.request("initialize", init_params(), REQUEST_TIMEOUT)
-            .await?;
+    async fn initialize(&self, timeout: Duration) -> Result<()> {
+        self.request("initialize", init_params(), timeout).await?;
         self.notify("notifications/initialized");
         Ok(())
     }
@@ -502,10 +513,8 @@ impl HttpClient {
         })
     }
 
-    async fn initialize(&self) -> Result<()> {
-        let res = self
-            .request("initialize", init_params(), REQUEST_TIMEOUT)
-            .await?;
+    async fn initialize(&self, timeout: Duration) -> Result<()> {
+        let res = self.request("initialize", init_params(), timeout).await?;
         if let Some(v) = res.get("protocolVersion").and_then(Value::as_str) {
             *self.protocol.lock().unwrap() = Some(v.to_string());
         }

@@ -122,6 +122,7 @@ fn fs_server() -> ServerConfig {
         mode: Default::default(),
         pinned_tools: vec![],
         harnesses: vec![],
+        start_timeout_secs: None,
         origin: None,
     }
 }

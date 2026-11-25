@@ -27,6 +27,7 @@ fn fake(id: &str, mode: InstanceMode) -> ServerConfig {
         mode,
         pinned_tools: vec![],
         harnesses: vec![],
+        start_timeout_secs: None,
         origin: None,
     }
 }
@@ -898,6 +899,7 @@ async fn http_transport_child_is_proxied() {
             mode: InstanceMode::Shared,
             pinned_tools: vec![],
             harnesses: vec![],
+            start_timeout_secs: None,
             origin: None,
         })
         .unwrap();
@@ -1159,5 +1161,87 @@ async fn update_api_is_off_by_default_and_reports_a_found_release_when_on() {
     );
     let saved = mcpm_core::store::load(&rig.home).unwrap();
     assert!(!saved.auto_update);
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_starts_back_off_then_stop_until_restarted() {
+    let rig = Rig::start_with(|o| {
+        o.pool.retry_base = Duration::from_millis(400);
+        o.pool.retry_max = Duration::from_secs(5);
+        o.pool.max_start_failures = 3;
+    })
+    .await;
+    let pool = rig.daemon().pool();
+    let mut cfg = fake("slow", InstanceMode::Shared);
+    if let Transport::Stdio { env, .. } = &mut cfg.transport {
+        env.insert("FAKE_STARTUP_MS".into(), "1500".into());
+    }
+    cfg.start_timeout_secs = Some(1); // initialize answers after 1.5 s: every start fails
+    pool.add_server(cfg.clone()).unwrap();
+
+    let attempt = || async {
+        let t = std::time::Instant::now();
+        let err = pool.server_tools("slow", None).await.unwrap_err();
+        (format!("{err:#}"), t.elapsed())
+    };
+
+    // 1st failure: a real attempt that hits the 1 s start timeout.
+    let (e, took) = attempt().await;
+    assert!(e.contains("timed out after 1000ms"), "{e}");
+    assert!(took >= Duration::from_millis(900), "{took:?}");
+    // Inside the backoff: refused at once, nothing spawned.
+    let (e, took) = attempt().await;
+    assert!(e.contains("Next try in"), "{e}");
+    assert!(took < Duration::from_millis(200), "{took:?}");
+
+    // After 400 ms: 2nd real attempt; the wait doubles to 800 ms.
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    let (e, took) = attempt().await;
+    assert!(
+        took >= Duration::from_millis(900),
+        "2nd attempt must spawn: {e}"
+    );
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    let (e, took) = attempt().await;
+    assert!(
+        e.contains("Next try in") && took < Duration::from_millis(200),
+        "still backing off after 450 of 800 ms: {e}"
+    );
+
+    // 3rd failure stops it for good.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let (e, took) = attempt().await;
+    assert!(
+        took >= Duration::from_millis(900),
+        "3rd attempt must spawn: {e}"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let (e, took) = attempt().await;
+    assert!(e.contains("is stopped"), "{e}");
+    assert!(took < Duration::from_millis(200), "{took:?}");
+    let listed = pool.list_servers(None);
+    assert_eq!(listed[0]["status"], "failed");
+    assert!(
+        listed[0]["lastError"]
+            .as_str()
+            .unwrap()
+            .contains("timed out")
+    );
+
+    // Retry (restart) makes a real attempt again.
+    let err = pool.restart_server("slow", None, None).await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("timed out after 1000ms"),
+        "{err:#}"
+    );
+    assert_eq!(pool.list_servers(None)[0]["status"], "error");
+
+    // A longer per-server start timeout lets it start; a config change resets the backoff.
+    cfg.start_timeout_secs = Some(3);
+    pool.update_server(cfg).unwrap();
+    let tools = pool.server_tools("slow", None).await.unwrap();
+    assert_eq!(tools.len(), 5);
+    assert_eq!(pool.list_servers(None)[0]["status"], "running");
     rig.stop().await;
 }

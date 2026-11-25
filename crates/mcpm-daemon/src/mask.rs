@@ -213,6 +213,7 @@ mod tests {
             mode: InstanceMode::Shared,
             pinned_tools: vec![],
             harnesses: vec![],
+            start_timeout_secs: None,
             origin: None,
         }
     }

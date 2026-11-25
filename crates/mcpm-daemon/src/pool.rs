@@ -34,6 +34,12 @@ pub struct PoolOptions {
     pub connect_timeout: Duration,
     /// How long `tools/list` waits for pinned servers that are not running yet.
     pub pinned_wait: Duration,
+    /// Wait after the first failed start; doubles per failure up to `retry_max`.
+    pub retry_base: Duration,
+    pub retry_max: Duration,
+    /// Failed starts in a row after which a server is not started again until the user
+    /// restarts it or its config changes.
+    pub max_start_failures: u32,
 }
 
 impl Default for PoolOptions {
@@ -44,6 +50,9 @@ impl Default for PoolOptions {
             persist: true,
             connect_timeout: Duration::from_secs(60),
             pinned_wait: Duration::from_secs(5),
+            retry_base: Duration::from_secs(30),
+            retry_max: Duration::from_secs(15 * 60),
+            max_start_failures: 6,
         }
     }
 }
@@ -93,6 +102,11 @@ struct InstState {
     tools: Option<Arc<Vec<Value>>>,
     last_used: Instant,
     error: Option<String>,
+    /// Failed starts in a row (reset by a successful start; a restart or config change
+    /// replaces the instance).
+    failures: u32,
+    /// No new start attempt before this.
+    retry_at: Option<Instant>,
 }
 
 struct Instance {
@@ -110,6 +124,8 @@ impl Instance {
                 tools: None,
                 last_used: Instant::now(),
                 error: None,
+                failures: 0,
+                retry_at: None,
             }),
         }
     }
@@ -524,6 +540,9 @@ impl Pool {
         if let Some(c) = inst.live_client() {
             return Ok((inst, c));
         }
+        if let Some(msg) = self.start_blocked(&inst, &cfg.id) {
+            bail!(msg);
+        }
         let pool = self.clone();
         let inst2 = inst.clone();
         let task = tokio::spawn(async move {
@@ -534,6 +553,33 @@ impl Pool {
             .await
             .map_err(|e| anyhow!("connect task failed: {e}"))??;
         Ok((inst, client))
+    }
+
+    /// Why a new start attempt must not happen yet (backoff after failed starts), if so.
+    fn start_blocked(&self, inst: &Instance, id: &str) -> Option<String> {
+        let s = inst.state.lock().unwrap();
+        if s.failures == 0 {
+            return None;
+        }
+        let err = s.error.as_deref().unwrap_or("unknown error");
+        if s.failures >= self.inner.opts.max_start_failures {
+            return Some(format!(
+                "MCP server \"{id}\" failed to start {} times in a row and is stopped. Last error: {err}.                  Restart it in MCP Manager (or call mcpm_reload_server) to try again.",
+                s.failures
+            ));
+        }
+        let wait = s.retry_at?.checked_duration_since(Instant::now())?;
+        Some(format!(
+            "MCP server \"{id}\" failed to start ({err}). Next try in {}s.",
+            wait.as_secs().max(1)
+        ))
+    }
+
+    /// Backoff after `failures` failed starts in a row: base, 2x base, 4x base ... up to max.
+    fn retry_delay(&self, failures: u32) -> Duration {
+        let o = &self.inner.opts;
+        let factor = 1u32 << failures.saturating_sub(1).min(16);
+        o.retry_base.saturating_mul(factor).min(o.retry_max)
     }
 
     async fn connect_instance(
@@ -578,9 +624,15 @@ impl Pool {
         };
         let secrets = mask::secrets(&cfg);
         let started = Instant::now();
-        let attempt = tokio::time::timeout(self.inner.opts.connect_timeout, async {
+        let per_request = crate::client::start_timeout(&cfg);
+        // A custom start timeout also stretches the overall budget (initialize + tools/list).
+        let budget = match cfg.start_timeout_secs {
+            Some(_) => per_request * 2 + Duration::from_secs(10),
+            None => self.inner.opts.connect_timeout,
+        };
+        let attempt = tokio::time::timeout(budget, async {
             let client = McpClient::connect(&cfg, cb).await?;
-            match client.list_tools().await {
+            match client.list_tools_within(per_request).await {
                 Ok(tools) => Ok((client, tools)),
                 Err(e) => {
                     client.close();
@@ -601,6 +653,8 @@ impl Pool {
                 }
                 s.client = Some(client.clone());
                 s.tools = Some(Arc::new(tools));
+                s.failures = 0;
+                s.retry_at = None;
                 self.inner.log.info(&format!(
                     "server {} started in {}ms",
                     cfg.id,
@@ -611,21 +665,32 @@ impl Pool {
             other => {
                 let raw = match other {
                     Ok(Err(e)) => format!("{e:#}"),
-                    Err(_) => format!(
-                        "timed out starting MCP server after {}s",
-                        self.inner.opts.connect_timeout.as_secs()
-                    ),
+                    Err(_) => format!("timed out starting MCP server after {}s", budget.as_secs()),
                     Ok(Ok(_)) => unreachable!(),
                 };
                 let msg = mask::mask_text(&raw, &secrets);
                 let mut s = inst.state.lock().unwrap();
+                let mut next = String::new();
                 if s.generation == generation {
                     s.error = Some(msg.clone());
+                    s.failures += 1;
+                    if s.failures >= self.inner.opts.max_start_failures {
+                        s.retry_at = None;
+                        next = format!(
+                            "; stopped after {} failed starts (restart it to try again)",
+                            s.failures
+                        );
+                    } else {
+                        let wait = self.retry_delay(s.failures);
+                        s.retry_at = Some(Instant::now() + wait);
+                        next = format!("; next try in {}s at the earliest", wait.as_secs());
+                    }
                 }
                 drop(s);
                 self.inner
                     .log
-                    .warn(&format!("server {} failed to start: {msg}", cfg.id));
+                    .warn(&format!("server {} failed to start: {msg}{next}", cfg.id));
+                self.notify_changed();
                 Err(anyhow!(msg))
             }
         }
@@ -674,7 +739,11 @@ impl Pool {
                         status = "running";
                     } else if let Some(e) = &st.error {
                         last_error = Some(e.clone());
-                        if status == "idle" {
+                        if st.failures >= self.inner.opts.max_start_failures {
+                            if status != "running" {
+                                status = "failed";
+                            }
+                        } else if status == "idle" {
                             status = "error";
                         }
                     }
@@ -989,6 +1058,7 @@ mod tests {
             mode: InstanceMode::Shared,
             pinned_tools: vec![" a ".into(), "".into()],
             harnesses: vec!["Claude".into(), "claude".into(), "bad id".into()],
+            start_timeout_secs: None,
             origin: None,
         }
     }

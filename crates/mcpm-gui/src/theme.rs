@@ -60,7 +60,7 @@ impl Palette {
     pub fn run_state(&self, s: RunState) -> Color32 {
         match s {
             RunState::Running => self.ok,
-            RunState::Error => self.err,
+            RunState::Error | RunState::Failed => self.err,
             RunState::Idle => self.warn,
             RunState::Disabled | RunState::Stopped => self.idle,
         }
