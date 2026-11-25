@@ -9,6 +9,7 @@
 pub mod api;
 pub mod bridge;
 pub mod client;
+pub mod core_impl;
 pub mod coreops;
 pub mod daemon;
 pub mod http_client;
@@ -22,6 +23,7 @@ pub mod server;
 pub mod storage;
 pub mod timeutil;
 
+pub use core_impl::RealCoreOps;
 pub use coreops::{CoreOps, OpError, StubCoreOps};
 pub use daemon::{DaemonOptions, RunningDaemon, Started, run_blocking};
 pub use pool::{Pool, PoolOptions};

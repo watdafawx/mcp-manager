@@ -1,15 +1,30 @@
-//! Adapter over the core store. When `feat/core` lands, switch the re-export below to the real
-//! store and delete `mcpm-core/src/store_stub.rs`. Everything daemon-owned (token, daemon.json)
-//! lives here.
+//! Adapter over the core store plus daemon-owned files (token, daemon.json, logs).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-pub use mcpm_core::store_stub::{load_config, save_config, state_dir};
+pub use mcpm_core::store::{load as load_config, save as save_config};
 
-use crate::timeutil;
+/// Filesystem context for core operations, from the user's profile (`MCPM_HOME` honoured).
+pub fn core_context() -> mcpm_core::Core {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let appdata = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Roaming"));
+    let state_dir = mcpm_core::paths::state_dir(&home, &appdata);
+    mcpm_core::Core { home, appdata, state_dir }
+}
+
+/// State dir: `MCPM_HOME`, else `%APPDATA%\mcpm` (see `mcpm_core::paths::state_dir`).
+pub fn state_dir() -> PathBuf {
+    core_context().state_dir
+}
+
 
 pub fn token_path(home: &Path) -> PathBuf {
     home.join("token")
@@ -25,18 +40,7 @@ pub fn log_dir(home: &Path) -> PathBuf {
 
 /// Reads the control token, creating a random 32-byte hex one on first run.
 pub fn load_or_create_token(home: &Path) -> Result<String> {
-    let path = token_path(home);
-    if let Ok(t) = std::fs::read_to_string(&path) {
-        let t = t.trim().to_string();
-        if !t.is_empty() {
-            return Ok(t);
-        }
-    }
-    std::fs::create_dir_all(home)?;
-    let token = timeutil::random_hex(32);
-    // TODO(core): restrict the file ACL to the current user (core owns ACL handling).
-    std::fs::write(&path, &token).with_context(|| format!("write {}", path.display()))?;
-    Ok(token)
+    mcpm_core::paths::token(home).with_context(|| format!("token in {}", home.display()))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -91,6 +91,10 @@ fn run(cmd: Cmd) -> anyhow::Result<()> {
         Cmd::Daemon { port } => {
             let mut opts = mcpm_daemon::DaemonOptions::new(home);
             opts.port = port;
+            opts.core = std::sync::Arc::new(mcpm_daemon::RealCoreOps::new(
+                mcpm_daemon::storage::core_context(),
+                std::env::current_exe()?,
+            ));
             mcpm_daemon::run_blocking(opts)
         }
         Cmd::Bridge { harness } => {
