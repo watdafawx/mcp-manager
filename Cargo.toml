@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/mcpm-core", "crates/mcpm-daemon", "crates/mcpm-gui", "crates/mcpm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+mcpm-core = { path = "crates/mcpm-core" }
+mcpm-daemon = { path = "crates/mcpm-daemon" }
+mcpm-gui = { path = "crates/mcpm-gui" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+opt-level = "s"

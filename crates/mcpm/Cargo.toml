@@ -1,0 +1,15 @@
+[package]
+name = "mcpm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mcpm"
+path = "src/main.rs"
+
+[dependencies]
+mcpm-core.workspace = true
+mcpm-daemon.workspace = true
+mcpm-gui.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,138 @@
+# MCP Manager (`mcpm`): spec
+
+One native Rust app that manages every MCP server on this machine for every AI harness.
+It installs itself as the only MCP entry in each harness, proxies the servers it took over,
+and can put every harness config back exactly as it was.
+
+Successor of the `mcp-relay` T3 Patcher plugin. Reference implementation (Node, tested) to port from:
+`X:\Dev\T3-Patcher\plugins\mcp-relay\` (`discovery.cjs`, `autoconnect.cjs`, `relay-pool.cjs`,
+`relay-clients.cjs`, `relay-http.cjs`, tests in `test/`). Read them; keep their behaviour unless this spec says otherwise.
+UX inspiration: https://github.com/xingkongliang/skills-manager (one library, per-agent pages, badges per agent).
+
+## Goals
+
+- Low resources: daemon idle under ~10 MB RAM, no web tech anywhere. GUI only uses memory while open.
+- Never lose a user's config. Every write is snapshotted first; restore is always possible.
+- Coexists with the old `mcp-relay` plugin (different port, different entry name).
+
+## Layout
+
+Cargo workspace, edition 2024, MSRV = installed toolchain (1.99).
+
+| Crate | Kind | Owns |
+|---|---|---|
+| `crates/mcpm-core` | lib | types, manager config store, harness registry, config parsing/editing (JSON, JSONC, TOML), discovery, snapshots, takeover, restore. No tokio, no network. |
+| `crates/mcpm-daemon` | lib | tokio runtime: child pool (stdio + Streamable HTTP clients), MCP server endpoint, meta-tools, control API, stdio bridge. Depends on core. |
+| `crates/mcpm-gui` | lib | eframe/egui window (glow backend). Talks to the daemon only through the control API. Depends on core (types only). |
+| `crates/mcpm` | bin `mcpm.exe` | CLI entry, subcommands below. Depends on all three. |
+
+Single exe. Built with `#![windows_subsystem = "windows"]`; CLI subcommands call `AttachConsole(ATTACH_PARENT_PROCESS)` so output shows in a terminal, and `mcpm daemon` never shows a console.
+
+## Paths
+
+- State dir: `%APPDATA%\mcpm\` (`$XDG_CONFIG_HOME/mcpm` or `~/.config/mcpm` elsewhere). Override with env `MCPM_HOME` (tests use it).
+  - `config.json`: manager config (`ManagerConfig`).
+  - `token`: random 32-byte hex control token, created on first run, file only readable by the user.
+  - `snapshots/<snapshot-id>/manifest.json` + `files/<n>.bak` raw bytes.
+  - `daemon.json`: `{ pid, port, startedAt }` written by the running daemon, removed on clean exit.
+  - `logs/daemon.log` (rolling, max 2 x 1 MB).
+- Default port **39494** on `127.0.0.1` only (the old relay uses 39393).
+
+## Core types (`mcpm-core::model`)
+
+```rust
+pub struct ServerConfig {
+    pub id: String,                 // ^[a-z0-9][a-z0-9_-]{0,47}$ (case-insensitive)
+    pub name: String,
+    pub transport: Transport,       // Stdio { command, args, env, cwd } | Http { url, headers }
+    pub enabled: bool,
+    pub mode: InstanceMode,         // Shared (one child for all callers) | Session (one child per MCP session)
+    pub pinned_tools: Vec<String>,  // exposed directly as `<id>__<tool>` besides the meta-tools
+    pub harnesses: Vec<String>,     // empty = exposed to every harness
+    pub origin: Option<Origin>,     // where it was imported from (harness id, config path, entry name, scope)
+}
+pub struct ManagerConfig { pub version: u32, pub port: u16, pub servers: Vec<ServerConfig>, pub autostart: bool }
+```
+
+Unlike the relay, taken-over servers are **copied** into `config.json` with their env/headers, because takeover removes them from the harness file.
+`config.json` lives in the user profile; on Windows set its ACL to the current user only. Secrets are never logged and are masked (`••••`) in the GUI and in meta-tool output.
+
+## Harnesses
+
+`HarnessDef { id, label, files: Vec<HarnessFile> }`, `HarnessFile { path, format: Json|Jsonc|Toml, container: key path, scope: Global|Project, entry_style }`.
+Detected = file exists, or the app's install dir exists. v1 global files:
+
+| id | file (Windows) | container | manager entry written |
+|---|---|---|---|
+| claude | `~/.claude.json` | `mcpServers` (also read-only list of `projects.*.mcpServers`) | `{ "type": "http", "url": U }` |
+| claude-desktop | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` | stdio bridge: `{ "command": "<mcpm.exe>", "args": ["bridge", "--harness", "claude-desktop"] }` |
+| codex | `~/.codex/config.toml` | `[mcp_servers.<name>]` | `url = U` (streamable http) |
+| opencode | `~/.config/opencode/opencode.jsonc` or `.json` | `mcp` | `{ "type": "remote", "url": U, "enabled": true }` |
+| cursor | `~/.cursor/mcp.json` | `mcpServers` | `{ "url": U }` |
+| vscode | `%APPDATA%\Code\User\mcp.json` | `servers` | `{ "type": "http", "url": U }` |
+| antigravity | `~/.gemini/antigravity/mcp_config.json` (+ the other two paths in `discovery.cjs`) | `mcpServers` | `{ "serverUrl": U }` (check autoconnect.cjs for exact key) |
+| gemini-cli | `~/.gemini/settings.json` | `mcpServers` | `{ "httpUrl": U }` |
+| windsurf | `~/.codeium/windsurf/mcp_config.json` | `mcpServers` | `{ "serverUrl": U }` |
+
+`U = http://127.0.0.1:<port>/mcp/<harness-id>`. The path segment tells the daemon which harness is calling (more reliable than clientInfo; fall back to clientInfo like `detectHarness` in relay-http.cjs for plain `/mcp`).
+Manager entry name in every harness: `mcpm`. Entry formats: copy from `autoconnect.cjs` `buildEntry`/`codexBlock` where it already handles a harness; it is tested against real apps.
+Project scope (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, Claude `projects.*`) is listed read-only in v1, never rewritten.
+
+Editing must preserve the rest of the file: JSONC comments/format (text-splice edits like `autoconnect.cjs`, or a CST crate such as `jsonc-parser`), TOML via `toml_edit`. `~/.claude.json` is large and rewritten by Claude Code constantly: re-read immediately before writing, write atomically (temp file + rename), retry once on a changed mtime.
+
+## Snapshots, takeover, restore (core)
+
+Snapshot = for each file touched: original path, `existed`, raw bytes, sha256 before, sha256 after our write, timestamp, operation (`takeover` / `connect` / `edit`). Snapshots are immutable and kept until the user deletes them (GUI lists them).
+
+**Takeover(harness)** (also `takeover_all`):
+1. Snapshot the file.
+2. Parse MCP entries from the container. Skip our own `mcpm` entry and the old `t3-relay` entry.
+3. Import each into `ManagerConfig` (`origin` set). Same command+args/url already present = merge `harnesses` instead of duplicating (see `dedupeCandidates` in discovery.cjs). Imported server's `harnesses` = `[that harness]` so every harness keeps seeing exactly what it saw before.
+4. Remove those entries from the harness file, add the `mcpm` entry. One atomic write.
+5. Record post-write sha256 in the snapshot.
+
+Dry run (`plan_takeover`) returns the diff (entries to import, entries to remove, final file text) without writing; GUI and CLI show it before applying.
+
+**Restore(snapshot or harness)**:
+- If the current file sha256 == the snapshot's post-write sha256 (nobody touched it): write the original bytes back (or delete the file if it did not exist).
+- Else (the harness changed the file since): surgical restore: remove the `mcpm` entry, re-add every original MCP entry from the snapshot bytes that is missing, keep everything else as it is now. Report it as `merged`.
+- Imported servers whose `origin` harness was restored are disabled for that harness (removed from `harnesses`; server deleted from config if no harness left), unless the user chose "keep in manager".
+- `restore_all` restores every harness taken over; `mcpm uninstall` = `restore_all` + remove autostart + stop daemon.
+
+## Daemon
+
+- One process, tokio multi-thread runtime with 2 worker threads. MCP via the `rmcp` crate (official Rust SDK; check crates.io for current version and its client + streamable-http server features). Hand-roll only what rmcp lacks.
+- Child pool: port `relay-pool.cjs` + `relay-clients.cjs`: lazy start on first use, Shared vs Session instances, idle Session instances killed after 15 min, crash = mark errored and restart on next call, call log ring buffer (100 entries), tool list cache invalidated on `notifications/tools/list_changed`. On Windows spawn children with `CREATE_NO_WINDOW` and in a Job Object with `KILL_ON_JOB_CLOSE` so they die with the daemon. `needsShell` logic for `.cmd`/`.bat` (npx etc.).
+- Endpoint: Streamable HTTP at `/mcp` and `/mcp/<harness>`. Tools exposed to a caller = meta-tools + pinned tools of servers exposed to that harness:
+  - `mcpm_list_servers`, `mcpm_list_tools { server?, query? }`, `mcpm_call { server, tool, arguments }`, `mcpm_reload_server { server }` (same contract as the relay's `relay_*` tools).
+  - pinned: `<serverid>__<tool>` with the child's schema.
+  - Config changes send `notifications/tools/list_changed` to connected sessions.
+- Control API (JSON over the same listener, `/api/*`, requires header `Authorization: Bearer <token>`): status, list/add/update/remove/enable/disable/restart servers, list tools of a server, call log, harness list + status, plan/apply takeover, list snapshots, restore, shutdown. The GUI and CLI use this; core operations that touch files run inside the daemon so there is a single writer. If the daemon is not running, the CLI runs core operations directly.
+- `mcpm bridge --harness <id>`: stdio <-> HTTP bridge for stdio-only harnesses; starts the daemon if not running.
+- Autostart: HKCU `Software\Microsoft\Windows\CurrentVersion\Run` value `mcpm` = `"<exe>" daemon`. No admin.
+- Single instance: if `daemon.json` points at a live pid answering `/api/status`, a second `mcpm daemon` exits 0.
+
+## CLI (`mcpm`)
+
+`daemon` · `gui` (default when run with no args, e.g. double-click) · `status` · `harnesses` · `takeover [<harness>|--all] [--dry-run]` · `restore [<harness>|--all|--snapshot <id>]` · `snapshots` · `servers [list|add|remove|enable|disable]` · `bridge --harness <id>` · `autostart on|off` · `uninstall`.
+
+## GUI (egui)
+
+Opens with `mcpm gui`; starts the daemon if needed; closing the window leaves the daemon running. Pages (left nav):
+- **Servers**: one row per server: name, transport, status dot (idle/running/error), tool count, per-harness badges (click toggles exposure, like skills-manager), enable switch, restart. Detail pane: edit form (command/args/env with masked values, or url/headers), mode, pinned tools picker from the live tool list, recent calls.
+- **Harnesses**: one card per detected harness: config path, state (not connected / connected alongside / taken over), MCP entries found, buttons Take over (shows dry-run diff first) / Restore.
+- **Snapshots**: list, view diff vs current file, restore, delete.
+- **Settings**: port, autostart, open state dir, uninstall everything.
+Theme: follow system dark/light, no hard-coded garish colours.
+
+## Testing
+
+- core: unit tests for every parser/editor (JSONC with comments and trailing commas, TOML tables, Claude projects map), takeover plan, restore both paths (exact and merged), dedupe. Use `MCPM_HOME` + temp dirs, never real user files. Port the cases in `plugins/mcp-relay/test/*.test.ts`.
+- daemon: integration test with a tiny fake stdio MCP server (a test bin in the crate) exercising list/call/pinned/reload/session isolation and the control API.
+- GUI: checked by hand on rig (see below).
+
+## Machine rules (for anyone building this)
+
+- Local cargo: `pwsh -NoProfile -File X:\Dev\tools\cargo-ccd1.ps1 <args>`, never bare `cargo`.
+- Never open the GUI on this PC. GUI runs go to rig: `pwsh X:\Dev\tools\push-to-rig.ps1 -Project X:\Dev\mcp-manager -BuildOnRig -Exe mcpm -CargoArgs '-p','mcpm' -Launch -AppArgLine 'gui'`, then `-Stop -Slot N`.
+- Tests and builds run in the foreground; never touch the real harness files in tests.
