@@ -28,6 +28,7 @@ fn fake(id: &str, mode: InstanceMode) -> ServerConfig {
         pinned_tools: vec![],
         harnesses: vec![],
         start_timeout_secs: None,
+        idle_timeout_mins: None,
         origin: None,
     }
 }
@@ -205,6 +206,7 @@ async fn lists_servers_tools_and_calls() {
             "mcpm_list_servers",
             "mcpm_list_tools",
             "mcpm_call",
+            "mcpm_start_server",
             "mcpm_reload_server"
         ]
     );
@@ -900,6 +902,7 @@ async fn http_transport_child_is_proxied() {
             pinned_tools: vec![],
             harnesses: vec![],
             start_timeout_secs: None,
+            idle_timeout_mins: None,
             origin: None,
         })
         .unwrap();
@@ -914,7 +917,7 @@ async fn http_transport_child_is_proxied() {
             )
             .await,
     );
-    assert_eq!(listing["tools"].as_array().unwrap().len(), 4, "{listing}");
+    assert_eq!(listing["tools"].as_array().unwrap().len(), 5, "{listing}");
     // call through both layers: outer mcpm_call -> inner mcpm_call -> fake echo
     let res = outer
         .tool(
@@ -1243,5 +1246,65 @@ async fn failed_starts_back_off_then_stop_until_restarted() {
     let tools = pool.server_tools("slow", None).await.unwrap();
     assert_eq!(tools.len(), 5);
     assert_eq!(pool.list_servers(None)[0]["status"], "running");
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_servers_unload_and_pinned_tools_list_from_cache() {
+    let rig = Rig::start_with(|o| o.pool.shared_idle_ttl = Duration::from_millis(200)).await;
+    let pool = rig.daemon().pool();
+    let mut all = fake("lazy", InstanceMode::Shared);
+    all.pinned_tools = vec!["*".into()];
+    pool.add_server(all).unwrap();
+    let mut keep = fake("keep", InstanceMode::Shared);
+    keep.idle_timeout_mins = Some(0);
+    pool.add_server(keep).unwrap();
+
+    // Never started: listing pinned tools has to start it once.
+    let sid = rig.init("/mcp/claude").await;
+    let start = payload(
+        &rig.tool(
+            "/mcp/claude",
+            &sid,
+            "mcpm_start_server",
+            json!({ "server": "keep" }),
+        )
+        .await,
+    );
+    assert_eq!(start["toolCount"], 5);
+    assert_eq!(start["alreadyRunning"], false);
+    let again = payload(
+        &rig.tool(
+            "/mcp/claude",
+            &sid,
+            "mcpm_start_server",
+            json!({ "server": "keep" }),
+        )
+        .await,
+    );
+    assert_eq!(again["alreadyRunning"], true);
+    assert_eq!(pool.pinned_tools(None, None).await.len(), 5);
+    assert_eq!(pool.running_instances(), 2);
+    assert!(rig.home.join("tools-cache.json").exists());
+
+    // Idle: the default-TTL server stops, the "never" one stays.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(pool.reap_idle(), 1);
+    assert_eq!(pool.running_instances(), 1);
+    let listed = pool.list_servers(None);
+    let lazy = listed.iter().find(|s| s["id"] == "lazy").unwrap();
+    assert_eq!(lazy["status"], "idle");
+    assert_eq!(lazy["toolCount"], 5, "tool count comes from the cache");
+
+    // Pinned tools still listed, from the cache, without starting anything.
+    let pinned = pool.pinned_tools(None, None).await;
+    assert_eq!(pinned.len(), 5);
+    assert!(pinned.iter().any(|t| t.name == "lazy__pid"), "{pinned:?}");
+    assert_eq!(pool.running_instances(), 1, "listing must not start it");
+
+    // A call to a pinned tool starts it again.
+    let r = rig.tool("/mcp/claude", &sid, "lazy__pid", json!({})).await;
+    assert!(!is_error(&r), "{r}");
+    assert_eq!(pool.running_instances(), 2);
     rig.stop().await;
 }

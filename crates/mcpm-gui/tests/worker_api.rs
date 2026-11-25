@@ -123,6 +123,7 @@ fn fs_server() -> ServerConfig {
         pinned_tools: vec![],
         harnesses: vec![],
         start_timeout_secs: None,
+        idle_timeout_mins: None,
         origin: None,
     }
 }

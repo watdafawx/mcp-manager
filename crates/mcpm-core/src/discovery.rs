@@ -206,6 +206,7 @@ pub(crate) fn server(
         pinned_tools: vec![],
         harnesses: vec![h.into()],
         start_timeout_secs: None,
+        idle_timeout_mins: None,
         origin: Some(Origin {
             harness: h.into(),
             path: path.to_string_lossy().into(),
@@ -268,6 +269,7 @@ mod tests {
             pinned_tools: vec![],
             harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
             start_timeout_secs: None,
+            idle_timeout_mins: None,
             origin: None,
         }
     }

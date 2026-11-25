@@ -22,6 +22,7 @@ pub mod rpc;
 pub mod server;
 pub mod storage;
 pub mod timeutil;
+pub mod toolcache;
 pub mod tray;
 pub mod update;
 

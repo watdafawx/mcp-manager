@@ -19,6 +19,7 @@ use crate::logging::Logger;
 use crate::mask;
 use crate::storage;
 use crate::timeutil;
+use crate::toolcache::ToolCache;
 
 pub const MAX_CALL_LOG: usize = 100;
 pub const SESSION_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -27,6 +28,8 @@ pub const SESSION_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
 pub struct PoolOptions {
     /// Session instances unused for this long are killed.
     pub idle_ttl: Duration,
+    /// Shared instances unused for this long are stopped (per server: `idleTimeoutMins`).
+    pub shared_idle_ttl: Duration,
     pub reap_interval: Duration,
     /// Write `config.json` on every change.
     pub persist: bool,
@@ -46,6 +49,7 @@ impl Default for PoolOptions {
     fn default() -> Self {
         Self {
             idle_ttl: SESSION_IDLE_TTL,
+            shared_idle_ttl: Duration::from_secs(15 * 60),
             reap_interval: Duration::from_secs(60),
             persist: true,
             connect_timeout: Duration::from_secs(60),
@@ -111,6 +115,8 @@ struct InstState {
 
 struct Instance {
     connect_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Tool calls running on this instance (an instance with calls is never unloaded).
+    busy: AtomicUsize,
     state: Mutex<InstState>,
 }
 
@@ -118,6 +124,7 @@ impl Instance {
     fn new() -> Self {
         Self {
             connect_lock: Arc::new(tokio::sync::Mutex::new(())),
+            busy: AtomicUsize::new(0),
             state: Mutex::new(InstState {
                 client: None,
                 generation: 0,
@@ -166,6 +173,8 @@ struct Inner {
     events: broadcast::Sender<()>,
     opts: PoolOptions,
     log: Arc<Logger>,
+    /// Last known tools per server, so pinned tools list without starting anything.
+    tool_cache: ToolCache,
 }
 
 /// Counts a running tool call for as long as it lives.
@@ -261,8 +270,10 @@ pub fn normalize_server(mut cfg: ServerConfig) -> Result<ServerConfig> {
 impl Pool {
     pub fn new(home: PathBuf, cfg: ManagerConfig, opts: PoolOptions, log: Arc<Logger>) -> Pool {
         let (events, _) = broadcast::channel(16);
+        let tool_cache = ToolCache::load(opts.persist.then_some(home.as_path()));
         Pool {
             inner: Arc::new(Inner {
+                tool_cache,
                 home,
                 cfg: RwLock::new(cfg),
                 instances: Mutex::new(HashMap::new()),
@@ -366,6 +377,9 @@ impl Pool {
         };
         self.close_instances_for(id);
         if existed {
+            let cfg = self.config();
+            let ids: Vec<&str> = cfg.servers.iter().map(|s| s.id.as_str()).collect();
+            self.inner.tool_cache.retain(&ids);
             self.save();
             self.notify_changed();
         }
@@ -444,15 +458,33 @@ impl Pool {
         }
     }
 
-    /// Kills idle Session instances. Returns how many were closed.
+    /// Stops instances nobody used for a while: Session ones after `idle_ttl`, Shared ones after
+    /// the server's `idleTimeoutMins` (default `shared_idle_ttl`, 0 = never). Only healthy,
+    /// unbusy instances go, so the start backoff of a failing server is kept. Returns how many.
     pub fn reap_idle(&self) -> usize {
-        let ttl = self.inner.opts.idle_ttl;
+        let cfg = self.config();
+        let o = &self.inner.opts;
+        let ttl_of = |key: &str| -> Option<Duration> {
+            if key.contains("::") {
+                return Some(o.idle_ttl);
+            }
+            let s = cfg.servers.iter().find(|s| s.id == key)?;
+            match s.idle_timeout_mins {
+                Some(0) => None,
+                Some(m) => Some(Duration::from_secs(u64::from(m) * 60)),
+                None => Some(o.shared_idle_ttl),
+            }
+        };
         let removed: Vec<Arc<Instance>> = {
             let mut m = self.inner.instances.lock().unwrap();
             let keys: Vec<String> = m
                 .iter()
                 .filter(|(k, i)| {
-                    k.contains("::") && i.state.lock().unwrap().last_used.elapsed() > ttl
+                    let Some(ttl) = ttl_of(k) else { return false };
+                    let s = i.state.lock().unwrap();
+                    i.busy.load(Ordering::Relaxed) == 0
+                        && s.failures == 0
+                        && s.last_used.elapsed() > ttl
                 })
                 .map(|(k, _)| k.clone())
                 .collect();
@@ -474,7 +506,7 @@ impl Pool {
                 if n > 0 {
                     pool.inner
                         .log
-                        .info(&format!("reaped {n} idle session instance(s)"));
+                        .info(&format!("stopped {n} idle server instance(s)"));
                 }
             }
         })
@@ -643,6 +675,7 @@ impl Pool {
         .await;
         match attempt {
             Ok(Ok((client, tools))) => {
+                self.inner.tool_cache.put(&cfg, &tools);
                 let client = Arc::new(client);
                 let mut s = inst.state.lock().unwrap();
                 if s.generation != generation {
@@ -751,6 +784,9 @@ impl Pool {
                         tool_count = tool_count.max(t.len());
                     }
                 }
+                if tool_count == 0 {
+                    tool_count = self.inner.tool_cache.get(s).map_or(0, |t| t.len());
+                }
                 let mut v = serde_json::to_value(mask::mask_config(s)).unwrap_or(Value::Null);
                 v["status"] = json!(status);
                 v["toolCount"] = json!(tool_count);
@@ -852,7 +888,8 @@ impl Pool {
             .collect();
         let mut handles = Vec::new();
         for s in &wanted {
-            if self.cached_tools(s, session).is_some() {
+            // Running, or seen before: list from what we know and start nothing.
+            if self.cached_tools(s, session).is_some() || self.inner.tool_cache.get(s).is_some() {
                 continue;
             }
             let pool = self.clone();
@@ -877,7 +914,9 @@ impl Pool {
         }
         let mut out = Vec::new();
         for s in wanted {
-            let known = self.cached_tools(s, session);
+            let known = self
+                .cached_tools(s, session)
+                .or_else(|| self.inner.tool_cache.get(s).map(Arc::new));
             let names: Vec<String> = if s.pins_all() {
                 known
                     .iter()
@@ -941,6 +980,7 @@ impl Pool {
         let _busy = InFlight::enter(&self.inner.in_flight);
         let res = async {
             let (inst, client) = self.ensure(server_id, session, harness).await?;
+            let _running = InFlight::enter(&inst.busy);
             let r = client
                 .call_tool(tool, args)
                 .await
@@ -1035,6 +1075,35 @@ impl Pool {
         Ok(json!({ "id": server_id, "status": "running", "toolCount": count }))
     }
 
+    /// Starts a server (no-op when it already runs) and returns its tool names.
+    pub async fn start_server(
+        &self,
+        server_id: &str,
+        session: Option<&str>,
+        harness: Option<&str>,
+    ) -> Result<Value> {
+        let was_running = self
+            .server(server_id)
+            .and_then(|c| self.cached_tools(&c, session))
+            .is_some();
+        let (inst, client) = self.ensure(server_id, session, harness).await?;
+        let tools = self.tools_of(&inst, &client).await?;
+        if !was_running {
+            self.notify_changed(); // pinned tools of a never-seen server appear now
+        }
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .collect();
+        Ok(json!({
+            "id": server_id,
+            "status": "running",
+            "alreadyRunning": was_running,
+            "toolCount": names.len(),
+            "tools": names,
+        }))
+    }
+
     /// Tools of one server for the control API (starts it if needed).
     pub async fn server_tools(&self, server_id: &str, session: Option<&str>) -> Result<Vec<Value>> {
         let (inst, client) = self.ensure(server_id, session, None).await?;
@@ -1059,6 +1128,7 @@ mod tests {
             pinned_tools: vec![" a ".into(), "".into()],
             harnesses: vec!["Claude".into(), "claude".into(), "bad id".into()],
             start_timeout_secs: None,
+            idle_timeout_mins: None,
             origin: None,
         }
     }

@@ -22,10 +22,11 @@ const SSE_KEEPALIVE: Duration = Duration::from_secs(25);
 pub const SESSION_HEADER: &str = "mcp-session-id";
 pub const HARNESS_HEADER: &str = "x-mcpm-harness";
 
-pub const META_TOOLS: [&str; 4] = [
+pub const META_TOOLS: [&str; 5] = [
     "mcpm_list_servers",
     "mcpm_list_tools",
     "mcpm_call",
+    "mcpm_start_server",
     "mcpm_reload_server",
 ];
 
@@ -53,6 +54,13 @@ pub fn meta_tool_defs() -> Vec<Value> {
                 "arguments": { "type": "object", "description": "JSON arguments for the tool.", "additionalProperties": true },
                 "sessionKey": { "type": "string", "description": "Optional explicit session key for session-mode servers (defaults to the caller's MCP session id)." }
             }, "required": ["server", "tool"], "additionalProperties": false }
+        }),
+        json!({
+            "name": "mcpm_start_server",
+            "description": "Start an MCP server now (servers also start by themselves on first use, and stop after a while unused). Returns its tool names. Use it to warm up a slow server before calling it.",
+            "inputSchema": { "type": "object", "properties": {
+                "server": { "type": "string", "description": "Server id from mcpm_list_servers." }
+            }, "required": ["server"], "additionalProperties": false }
         }),
         json!({
             "name": "mcpm_reload_server",
@@ -324,6 +332,16 @@ async fn tool_call(st: &Arc<AppState>, params: &Value, ctx: &Ctx) -> Value {
             let call_args = args.get("arguments").cloned().unwrap_or_else(|| json!({}));
             match pool.call_tool(server, tool, call_args, key, harness).await {
                 Ok(v) => v,
+                Err(e) => rpc::error_result(e.to_string()),
+            }
+        }
+        "mcpm_start_server" => {
+            let server = str_arg(&args, "server");
+            if server.is_empty() {
+                return rpc::error_result("mcpm_start_server requires `server`");
+            }
+            match pool.start_server(server, session, harness).await {
+                Ok(v) => rpc::text_result(&v, false),
                 Err(e) => rpc::error_result(e.to_string()),
             }
         }

@@ -55,6 +55,9 @@ pub struct ServerConfig {
     /// Seconds to wait for `initialize` and the first `tools/list` (default 30).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_timeout_secs: Option<u32>,
+    /// Stop the child after this many minutes without a call (default 15; 0 = never).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_mins: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
 }
@@ -181,6 +184,7 @@ mod tests {
             pinned_tools: vec!["a".into()],
             harnesses: vec![],
             start_timeout_secs: None,
+            idle_timeout_mins: None,
             origin: None,
         };
         assert!(s.pins("a") && !s.pins("b") && !s.pins_all());
@@ -211,6 +215,7 @@ mod tests {
             pinned_tools: vec![],
             harnesses: vec![],
             start_timeout_secs: None,
+            idle_timeout_mins: None,
             origin: None,
         };
         assert!(s.is_exposed_to(Some("codex")));

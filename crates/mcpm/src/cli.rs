@@ -232,6 +232,7 @@ pub fn build_server(a: &AddArgs) -> Result<ServerConfig> {
         pinned_tools: vec![],
         harnesses: a.harnesses.clone(),
         start_timeout_secs: None,
+        idle_timeout_mins: None,
         origin: None,
     })
 }

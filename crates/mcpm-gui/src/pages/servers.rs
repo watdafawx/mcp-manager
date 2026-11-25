@@ -716,6 +716,19 @@ fn form_fields(ui: &mut Ui, form: &mut ServerForm, editing: bool, secrets_visibl
             ui.label("seconds");
         });
     });
+    form_row(ui, "Unload idle", |ui| {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut form.idle_timeout)
+                    .hint_text("15")
+                    .desired_width(60.0),
+            )
+            .on_hover_text(
+                "Stop the server after this many minutes without a call. Empty = 15, 0 = never. It starts again on the next call; its tools stay listed.",
+            );
+            ui.label("minutes");
+        });
+    });
     form_row(ui, "Mode", |ui| {
         egui::ComboBox::from_id_salt("mode")
             .selected_text(match form.mode {
