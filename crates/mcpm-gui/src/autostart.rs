@@ -78,7 +78,10 @@ mod tests {
     #[test]
     fn value_is_quoted_exe_plus_daemon() {
         let exe = Path::new(r"C:\Program Files\mcpm\mcpm.exe");
-        assert_eq!(command_for(exe), r#""C:\Program Files\mcpm\mcpm.exe" daemon"#);
+        assert_eq!(
+            command_for(exe),
+            r#""C:\Program Files\mcpm\mcpm.exe" daemon"#
+        );
         assert!(matches_exe(&command_for(exe), exe));
         assert!(!matches_exe(r"C:\other.exe daemon", exe));
     }
@@ -94,7 +97,11 @@ mod tests {
         set_in(&sub, true, exe).unwrap();
         assert_eq!(current_in(&sub).unwrap(), Some(command_for(exe)));
         set_in(&sub, false, exe).unwrap();
-        assert_eq!(current_in(&sub).unwrap(), None, "value must be gone after off");
+        assert_eq!(
+            current_in(&sub).unwrap(),
+            None,
+            "value must be gone after off"
+        );
         set_in(&sub, false, exe).unwrap(); // idempotent
         let _ = windows_registry::CURRENT_USER.remove_tree(&root);
     }

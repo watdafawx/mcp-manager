@@ -69,18 +69,27 @@ impl ServerRow {
             .get("status")
             .and_then(Value::as_str)
             .map(RunState::parse)
-            .unwrap_or(if cfg.enabled { RunState::Idle } else { RunState::Disabled });
+            .unwrap_or(if cfg.enabled {
+                RunState::Idle
+            } else {
+                RunState::Disabled
+            });
         Some(Self {
             tool_count: v.get("toolCount").and_then(Value::as_u64).unwrap_or(0) as usize,
             active_sessions: v.get("activeSessions").and_then(Value::as_u64).unwrap_or(0) as usize,
-            last_error: v.get("lastError").and_then(Value::as_str).map(str::to_string),
+            last_error: v
+                .get("lastError")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             cfg,
             state,
         })
     }
 
     pub fn from_list(v: &Value) -> Vec<Self> {
-        v.as_array().map(|a| a.iter().filter_map(Self::from_value).collect()).unwrap_or_default()
+        v.as_array()
+            .map(|a| a.iter().filter_map(Self::from_value).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -133,18 +142,30 @@ impl HarnessRow {
             .map(|a| {
                 a.iter()
                     .map(|f| HarnessFileInfo {
-                        path: f.get("path").and_then(Value::as_str).unwrap_or("").to_string(),
+                        path: f
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                         entries: f
                             .get("entries")
                             .and_then(Value::as_array)
-                            .map(|e| e.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                            .map(|e| {
+                                e.iter()
+                                    .filter_map(|x| x.as_str().map(str::to_string))
+                                    .collect()
+                            })
                             .unwrap_or_default(),
                     })
                     .collect()
             })
             .unwrap_or_default();
         Some(Self {
-            label: v.get("label").and_then(Value::as_str).unwrap_or(&id).to_string(),
+            label: v
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or(&id)
+                .to_string(),
             detected: v.get("detected").and_then(Value::as_bool).unwrap_or(false),
             state: HarnessState::parse(v.get("state").and_then(Value::as_str).unwrap_or("")),
             files,
@@ -153,7 +174,9 @@ impl HarnessRow {
     }
 
     pub fn from_list(v: &Value) -> Vec<Self> {
-        v.as_array().map(|a| a.iter().filter_map(Self::from_value).collect()).unwrap_or_default()
+        v.as_array()
+            .map(|a| a.iter().filter_map(Self::from_value).collect())
+            .unwrap_or_default()
     }
 
     /// Entries other than our own, across every file.
@@ -195,18 +218,34 @@ impl Plan {
             .as_array()?
             .iter()
             .map(|f| PlanFile {
-                path: f.pointer("/file/path").and_then(Value::as_str).unwrap_or("").to_string(),
+                path: f
+                    .pointer("/file/path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 imports: f
                     .get("imports")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(|s| serde_json::from_value(s.clone()).ok()).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 remove: f
                     .get("remove")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect()
+                    })
                     .unwrap_or_default(),
-                final_text: f.get("final_text").and_then(Value::as_str).unwrap_or("").to_string(),
+                final_text: f
+                    .get("final_text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             })
             .collect();
         Some(Self { harness, files })
@@ -244,8 +283,16 @@ impl SnapRow {
             .map(|a| {
                 a.iter()
                     .map(|f| SnapFile {
-                        harness: f.get("harness").and_then(Value::as_str).unwrap_or("").to_string(),
-                        path: PathBuf::from(f.pointer("/file/path").and_then(Value::as_str).unwrap_or("")),
+                        harness: f
+                            .get("harness")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        path: PathBuf::from(
+                            f.pointer("/file/path")
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                        ),
                         existed: f.get("existed").and_then(Value::as_bool).unwrap_or(true),
                     })
                     .collect()
@@ -254,15 +301,21 @@ impl SnapRow {
         Some(Self {
             id: v.get("id")?.as_str()?.to_string(),
             timestamp: v.get("timestamp").and_then(Value::as_u64).unwrap_or(0),
-            operation: v.get("operation").and_then(Value::as_str).unwrap_or("").to_string(),
+            operation: v
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
             files,
         })
     }
 
     /// Newest first.
     pub fn from_list(v: &Value) -> Vec<Self> {
-        let mut out: Vec<Self> =
-            v.as_array().map(|a| a.iter().filter_map(Self::from_value).collect()).unwrap_or_default();
+        let mut out: Vec<Self> = v
+            .as_array()
+            .map(|a| a.iter().filter_map(Self::from_value).collect())
+            .unwrap_or_default();
         out.sort_by_key(|a| std::cmp::Reverse(a.timestamp));
         out
     }
@@ -293,8 +346,16 @@ impl CallRow {
                     .map(|c| Self {
                         timestamp: c.get("timestamp").and_then(Value::as_u64).unwrap_or(0),
                         harness: c.get("harness").and_then(Value::as_str).map(str::to_string),
-                        server_id: c.get("serverId").and_then(Value::as_str).unwrap_or("").to_string(),
-                        tool: c.get("tool").and_then(Value::as_str).unwrap_or("").to_string(),
+                        server_id: c
+                            .get("serverId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        tool: c
+                            .get("tool")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
                         ok: c.get("ok").and_then(Value::as_bool).unwrap_or(false),
                         duration_ms: c.get("durationMs").and_then(Value::as_u64).unwrap_or(0),
                         error: c.get("error").and_then(Value::as_str).map(str::to_string),
@@ -319,7 +380,11 @@ impl ToolInfo {
                     .filter_map(|t| {
                         Some(Self {
                             name: t.get("name")?.as_str()?.to_string(),
-                            description: t.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+                            description: t
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
                         })
                     })
                     .collect()
@@ -344,7 +409,12 @@ pub fn format_time(ms: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 pub fn format_uptime(secs: u64) -> String {
@@ -368,7 +438,10 @@ mod tests {
             "harnesses": ["claude"], "status": "running", "toolCount": 7, "activeSessions": 1, "lastError": null
         });
         let r = ServerRow::from_value(&v).unwrap();
-        assert_eq!((r.cfg.id.as_str(), r.state, r.tool_count), ("fs", RunState::Running, 7));
+        assert_eq!(
+            (r.cfg.id.as_str(), r.state, r.tool_count),
+            ("fs", RunState::Running, 7)
+        );
         assert!(r.last_error.is_none());
         assert_eq!(ServerRow::from_list(&json!([v, {"bad": 1}])).len(), 1);
     }

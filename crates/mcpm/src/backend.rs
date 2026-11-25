@@ -56,7 +56,11 @@ impl Backend {
     pub fn apply(&self, target: &str) -> Result<Value> {
         match self {
             Self::Daemon(c) => {
-                let body = if target == "all" { json!({ "all": true }) } else { json!({ "harness": target }) };
+                let body = if target == "all" {
+                    json!({ "all": true })
+                } else {
+                    json!({ "harness": target })
+                };
                 Ok(c.slow().post("/api/takeover/apply", &body)?)
             }
             Self::Direct(o) => op(o.apply_takeover(target)),
@@ -93,7 +97,8 @@ impl Backend {
                     .servers
                     .iter()
                     .map(|s| {
-                        let mut v = serde_json::to_value(mask::mask_config(s)).unwrap_or(Value::Null);
+                        let mut v =
+                            serde_json::to_value(mask::mask_config(s)).unwrap_or(Value::Null);
                         v["status"] = json!(if s.enabled { "stopped" } else { "disabled" });
                         v
                     })
@@ -144,7 +149,11 @@ impl Backend {
                 Ok(())
             }
             Self::Direct(_) => self.edit_config(|c| {
-                let s = c.servers.iter_mut().find(|s| s.id == id).ok_or_else(|| anyhow!("unknown server `{id}`"))?;
+                let s = c
+                    .servers
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                    .ok_or_else(|| anyhow!("unknown server `{id}`"))?;
                 s.enabled = on;
                 Ok(())
             }),
@@ -153,7 +162,9 @@ impl Backend {
 
     /// Stops the daemon if one runs. Returns whether there was one.
     pub fn shutdown(&self) -> Result<bool> {
-        let Some(c) = self.conn() else { return Ok(false) };
+        let Some(c) = self.conn() else {
+            return Ok(false);
+        };
         c.post("/api/shutdown", &json!({}))?;
         let home = self.core().state_dir;
         for _ in 0..50 {
@@ -165,7 +176,10 @@ impl Backend {
         Ok(true)
     }
 
-    fn edit_config(&self, f: impl FnOnce(&mut mcpm_core::model::ManagerConfig) -> Result<()>) -> Result<()> {
+    fn edit_config(
+        &self,
+        f: impl FnOnce(&mut mcpm_core::model::ManagerConfig) -> Result<()>,
+    ) -> Result<()> {
         let dir = self.core().state_dir;
         let mut cfg = mcpm_core::store::load(&dir)?;
         f(&mut cfg)?;

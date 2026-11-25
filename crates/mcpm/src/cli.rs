@@ -168,7 +168,9 @@ fn pairs(list: &[String]) -> Result<BTreeMap<String, String>> {
 pub fn build_server(a: &AddArgs) -> Result<ServerConfig> {
     let id = a.id.trim().to_string();
     if !valid_server_id(&id) {
-        bail!("invalid id `{id}`: use letters, digits, `-` or `_` (max 48, start with a letter or digit)");
+        bail!(
+            "invalid id `{id}`: use letters, digits, `-` or `_` (max 48, start with a letter or digit)"
+        );
     }
     let transport = match (&a.command, &a.url) {
         (Some(_), Some(_)) => bail!("use either --command or --url, not both"),
@@ -195,12 +197,19 @@ pub fn build_server(a: &AddArgs) -> Result<ServerConfig> {
             if !a.args.is_empty() || !a.env.is_empty() || !a.trailing.is_empty() {
                 bail!("--arg/--env only apply to --command servers");
             }
-            Transport::Http { url: url.clone(), headers: pairs(&a.headers)? }
+            Transport::Http {
+                url: url.clone(),
+                headers: pairs(&a.headers)?,
+            }
         }
         (None, None) => bail!("give --command or --url"),
     };
     Ok(ServerConfig {
-        name: a.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| id.clone()),
+        name: a
+            .name
+            .clone()
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| id.clone()),
         id,
         transport,
         enabled: !a.disabled,
@@ -238,14 +247,24 @@ mod tests {
     fn takeover_needs_exactly_one_target() {
         assert!(parse(&["takeover"]).is_err());
         assert!(parse(&["takeover", "cursor", "--all"]).is_err());
-        let Some(Cmd::Takeover { harness, all, dry_run, .. }) =
-            parse(&["takeover", "cursor", "--dry-run"]).unwrap().command
+        let Some(Cmd::Takeover {
+            harness,
+            all,
+            dry_run,
+            ..
+        }) = parse(&["takeover", "cursor", "--dry-run"]).unwrap().command
         else {
             panic!()
         };
-        assert_eq!((harness.as_deref(), all, dry_run), (Some("cursor"), false, true));
+        assert_eq!(
+            (harness.as_deref(), all, dry_run),
+            (Some("cursor"), false, true)
+        );
         assert!(parse(&["takeover", "--all"]).is_ok());
-        assert!(parse(&["takeover", "--all", "--text"]).is_err(), "--text needs --dry-run");
+        assert!(
+            parse(&["takeover", "--all", "--text"]).is_err(),
+            "--text needs --dry-run"
+        );
     }
 
     #[test]
@@ -258,9 +277,13 @@ mod tests {
 
     #[test]
     fn servers_default_is_list_and_autostart_default_is_status() {
-        let Some(Cmd::Servers { action }) = parse(&["servers"]).unwrap().command else { panic!() };
+        let Some(Cmd::Servers { action }) = parse(&["servers"]).unwrap().command else {
+            panic!()
+        };
         assert!(action.is_none());
-        let Some(Cmd::Autostart { state }) = parse(&["autostart"]).unwrap().command else { panic!() };
+        let Some(Cmd::Autostart { state }) = parse(&["autostart"]).unwrap().command else {
+            panic!()
+        };
         assert_eq!(state, OnOff::Status);
         assert!(parse(&["autostart", "maybe"]).is_err());
     }
@@ -268,17 +291,42 @@ mod tests {
     #[test]
     fn add_stdio_with_hyphen_args_and_trailing() {
         let cli = parse(&[
-            "servers", "add", "fs", "--command", "npx", "--arg", "-y", "--env", "K=a=b", "--harness", "claude", "--",
-            "@x/server", "--flag",
+            "servers",
+            "add",
+            "fs",
+            "--command",
+            "npx",
+            "--arg",
+            "-y",
+            "--env",
+            "K=a=b",
+            "--harness",
+            "claude",
+            "--",
+            "@x/server",
+            "--flag",
         ])
         .unwrap();
-        let Some(Cmd::Servers { action: Some(ServersCmd::Add(a)) }) = cli.command else { panic!() };
+        let Some(Cmd::Servers {
+            action: Some(ServersCmd::Add(a)),
+        }) = cli.command
+        else {
+            panic!()
+        };
         let c = build_server(&a).unwrap();
-        let Transport::Stdio { command, args, env, .. } = &c.transport else { panic!() };
+        let Transport::Stdio {
+            command, args, env, ..
+        } = &c.transport
+        else {
+            panic!()
+        };
         assert_eq!(command, "npx");
         assert_eq!(args, &["-y", "@x/server", "--flag"]);
         assert_eq!(env.get("K").map(String::as_str), Some("a=b"));
-        assert_eq!((c.name.as_str(), c.enabled, c.harnesses.clone()), ("fs", true, vec!["claude".to_string()]));
+        assert_eq!(
+            (c.name.as_str(), c.enabled, c.harnesses.clone()),
+            ("fs", true, vec!["claude".to_string()])
+        );
     }
 
     #[test]
@@ -296,13 +344,41 @@ mod tests {
         assert_eq!(c.mode, InstanceMode::Session);
         assert!(matches!(c.transport, Transport::Http { .. }));
 
-        assert!(build_server(&AddArgs { id: "Bad Id".into(), command: Some("x".into()), ..Default::default() }).is_err());
-        assert!(build_server(&AddArgs { id: "a".into(), url: Some("ftp://x".into()), ..Default::default() }).is_err());
-        assert!(build_server(&AddArgs { id: "a".into(), ..Default::default() }).is_err());
         assert!(
-            build_server(&AddArgs { id: "a".into(), command: Some("x".into()), env: vec!["novalue".into()], ..Default::default() })
-                .is_err()
+            build_server(&AddArgs {
+                id: "Bad Id".into(),
+                command: Some("x".into()),
+                ..Default::default()
+            })
+            .is_err()
         );
-        assert!(parse(&["servers", "add", "a"]).is_err(), "needs --command or --url");
+        assert!(
+            build_server(&AddArgs {
+                id: "a".into(),
+                url: Some("ftp://x".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            build_server(&AddArgs {
+                id: "a".into(),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            build_server(&AddArgs {
+                id: "a".into(),
+                command: Some("x".into()),
+                env: vec!["novalue".into()],
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            parse(&["servers", "add", "a"]).is_err(),
+            "needs --command or --url"
+        );
     }
 }

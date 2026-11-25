@@ -18,7 +18,12 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 4] = [Page::Servers, Page::Harnesses, Page::Snapshots, Page::Settings];
+    pub const ALL: [Page; 4] = [
+        Page::Servers,
+        Page::Harnesses,
+        Page::Snapshots,
+        Page::Settings,
+    ];
     pub fn title(self) -> &'static str {
         match self {
             Page::Servers => "Servers",
@@ -80,8 +85,14 @@ pub enum Msg {
     Harnesses(Vec<HarnessRow>),
     Snapshots(Vec<SnapRow>),
     Calls(Vec<CallRow>),
-    Tools { id: String, result: Result<Vec<ToolInfo>, String> },
-    Revealed { id: String, cfg: Box<ServerConfig> },
+    Tools {
+        id: String,
+        result: Result<Vec<ToolInfo>, String>,
+    },
+    Revealed {
+        id: String,
+        cfg: Box<ServerConfig>,
+    },
     Plan(PlanView),
     Toast(Level, String),
     Busy(i32),
@@ -127,7 +138,8 @@ impl AppData {
             Msg::Servers(s) => {
                 // Tool lists and revealed secrets belong to servers that still exist.
                 self.tools.retain(|id, _| s.iter().any(|r| &r.cfg.id == id));
-                self.revealed.retain(|id, _| s.iter().any(|r| &r.cfg.id == id));
+                self.revealed
+                    .retain(|id, _| s.iter().any(|r| &r.cfg.id == id));
                 self.servers = s;
                 self.servers_rev += 1;
             }
@@ -157,11 +169,20 @@ impl AppData {
     pub fn toast(&mut self, level: Level, text: impl Into<String>) {
         let text = text.into();
         // The same error repeating every poll must not stack up.
-        if self.toasts.iter().any(|t| t.level == level && t.text == text) {
+        if self
+            .toasts
+            .iter()
+            .any(|t| t.level == level && t.text == text)
+        {
             return;
         }
         self.next_toast += 1;
-        self.toasts.push(Toast { id: self.next_toast, level, text, at: Instant::now() });
+        self.toasts.push(Toast {
+            id: self.next_toast,
+            level,
+            text,
+            at: Instant::now(),
+        });
         let excess = self.toasts.len().saturating_sub(5);
         self.toasts.drain(..excess);
     }
@@ -195,7 +216,10 @@ impl AppData {
         for s in &self.servers {
             for h in &s.cfg.harnesses {
                 if h != "all" && !out.iter().any(|(id, _)| id == h) {
-                    let label = self.harness(h).map(|x| x.label.clone()).unwrap_or_else(|| h.clone());
+                    let label = self
+                        .harness(h)
+                        .map(|x| x.label.clone())
+                        .unwrap_or_else(|| h.clone());
                     out.push((h.clone(), label));
                 }
             }
@@ -209,7 +233,11 @@ impl AppData {
 /// an empty list means "every harness").
 pub fn toggle_exposure(current: &[String], all: &[String], clicked: &str) -> Option<Vec<String>> {
     let exposed_everywhere = current.is_empty() || current.iter().any(|h| h == "all");
-    let mut set: Vec<String> = if exposed_everywhere { all.to_vec() } else { current.to_vec() };
+    let mut set: Vec<String> = if exposed_everywhere {
+        all.to_vec()
+    } else {
+        current.to_vec()
+    };
     if let Some(pos) = set.iter().position(|h| h == clicked) {
         set.remove(pos);
         if set.is_empty() {
@@ -252,7 +280,10 @@ mod tests {
     fn status_makes_online_and_offline_clears_it() {
         let mut d = AppData::default();
         assert_eq!(d.conn, ConnState::Starting);
-        d.apply(Msg::Status(Status { port: 1, ..Default::default() }));
+        d.apply(Msg::Status(Status {
+            port: 1,
+            ..Default::default()
+        }));
         assert_eq!(d.conn, ConnState::Online);
         d.apply(Msg::Offline("down".into()));
         assert!(d.status.is_none());
@@ -262,8 +293,14 @@ mod tests {
     #[test]
     fn servers_update_drops_stale_tool_lists() {
         let mut d = AppData::default();
-        d.apply(Msg::Tools { id: "a".into(), result: Ok(vec![]) });
-        d.apply(Msg::Tools { id: "b".into(), result: Err("x".into()) });
+        d.apply(Msg::Tools {
+            id: "a".into(),
+            result: Ok(vec![]),
+        });
+        d.apply(Msg::Tools {
+            id: "b".into(),
+            result: Err("x".into()),
+        });
         d.apply(Msg::Servers(vec![row("a", &[])]));
         assert!(d.tools.contains_key("a") && !d.tools.contains_key("b"));
         assert_eq!(d.servers_rev, 1);
@@ -309,15 +346,27 @@ mod tests {
     fn exposure_toggle_rules() {
         let all = ids(&["claude", "codex", "cursor"]);
         // from "everywhere": turning one off materialises the rest
-        assert_eq!(toggle_exposure(&[], &all, "codex"), Some(ids(&["claude", "cursor"])));
+        assert_eq!(
+            toggle_exposure(&[], &all, "codex"),
+            Some(ids(&["claude", "cursor"]))
+        );
         // turning it back on restores the open-ended "every harness"
-        assert_eq!(toggle_exposure(&ids(&["claude", "cursor"]), &all, "codex"), Some(vec![]));
+        assert_eq!(
+            toggle_exposure(&ids(&["claude", "cursor"]), &all, "codex"),
+            Some(vec![])
+        );
         // explicit list, add one that is not everything
-        assert_eq!(toggle_exposure(&ids(&["claude"]), &all, "codex"), Some(ids(&["claude", "codex"])));
+        assert_eq!(
+            toggle_exposure(&ids(&["claude"]), &all, "codex"),
+            Some(ids(&["claude", "codex"]))
+        );
         // last one cannot be removed
         assert_eq!(toggle_exposure(&ids(&["claude"]), &all, "claude"), None);
         // legacy "all" marker behaves like empty
-        assert_eq!(toggle_exposure(&ids(&["all"]), &all, "cursor"), Some(ids(&["claude", "codex"])));
+        assert_eq!(
+            toggle_exposure(&ids(&["all"]), &all, "cursor"),
+            Some(ids(&["claude", "codex"]))
+        );
     }
 
     #[test]

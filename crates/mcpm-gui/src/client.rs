@@ -25,7 +25,10 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn net(message: impl Into<String>) -> Self {
-        Self { status: None, message: message.into() }
+        Self {
+            status: None,
+            message: message.into(),
+        }
     }
     pub fn is_connect(&self) -> bool {
         self.status.is_none()
@@ -174,21 +177,43 @@ pub struct Conn {
 
 impl Conn {
     pub fn new(port: u16, token: String) -> Self {
-        Self { addr: SocketAddr::from((Ipv4Addr::LOCALHOST, port)), token, timeout: DEFAULT_TIMEOUT }
+        Self {
+            addr: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            token,
+            timeout: DEFAULT_TIMEOUT,
+        }
     }
 
     pub fn slow(&self) -> Self {
-        Self { timeout: SLOW_TIMEOUT, ..self.clone() }
+        Self {
+            timeout: SLOW_TIMEOUT,
+            ..self.clone()
+        }
     }
 
-    pub fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, ApiError> {
-        let r = http(self.addr, method, path, Some(&self.token), body, self.timeout)?;
+    pub fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, ApiError> {
+        let r = http(
+            self.addr,
+            method,
+            path,
+            Some(&self.token),
+            body,
+            self.timeout,
+        )?;
         if r.status >= 400 {
             let mut m = error_message(&r.body);
             if m.is_empty() {
                 m = format!("request failed: {method} {path}");
             }
-            return Err(ApiError { status: Some(r.status), message: m });
+            return Err(ApiError {
+                status: Some(r.status),
+                message: m,
+            });
         }
         if r.body.is_empty() {
             return Ok(Value::Null);
@@ -256,7 +281,11 @@ pub fn spawn_daemon(exe: &Path) -> std::io::Result<()> {
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         let flags = CREATE_NO_WINDOW | DETACHED_PROCESS;
         // Leave a launcher's job object when it allows breakaway so the daemon outlives us.
-        if cmd.creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB).spawn().is_ok() {
+        if cmd
+            .creation_flags(flags | CREATE_BREAKAWAY_FROM_JOB)
+            .spawn()
+            .is_ok()
+        {
             return Ok(());
         }
         cmd.creation_flags(flags).spawn().map(|_| ())
@@ -342,11 +371,16 @@ mod tests {
 
         let body = r#"{"error":"unknown server"}"#;
         let reply: &'static str = Box::leak(
-            format!("HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{body}", body.len())
-                .into_boxed_str(),
+            format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .into_boxed_str(),
         );
         let (port, h) = serve_once(reply);
-        let e = Conn::new(port, "t".into()).get("/api/servers/x").unwrap_err();
+        let e = Conn::new(port, "t".into())
+            .get("/api/servers/x")
+            .unwrap_err();
         h.join().unwrap();
         assert_eq!(e.status, Some(404));
         assert_eq!(e.message, "unknown server");
@@ -357,14 +391,23 @@ mod tests {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = l.local_addr().unwrap().port();
         drop(l);
-        assert!(Conn::new(port, "t".into()).get("/api/status").unwrap_err().is_connect());
+        assert!(
+            Conn::new(port, "t".into())
+                .get("/api/status")
+                .unwrap_err()
+                .is_connect()
+        );
     }
 
     #[test]
     fn locate_ignores_missing_and_stale_daemon_json() {
         let d = tempfile::tempdir().unwrap();
         assert!(locate(d.path()).is_none());
-        std::fs::write(d.path().join("daemon.json"), r#"{"pid":1,"port":1,"startedAt":"x"}"#).unwrap();
+        std::fs::write(
+            d.path().join("daemon.json"),
+            r#"{"pid":1,"port":1,"startedAt":"x"}"#,
+        )
+        .unwrap();
         assert!(locate(d.path()).is_none());
     }
 }

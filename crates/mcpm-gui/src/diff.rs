@@ -41,7 +41,10 @@ pub fn diff_lines(old: &str, new: &str) -> Vec<Line> {
 }
 
 fn line(tag: Tag, t: &str) -> Line {
-    Line { tag, text: t.to_string() }
+    Line {
+        tag,
+        text: t.to_string(),
+    }
 }
 
 fn lcs_diff(a: &[&str], b: &[&str]) -> Vec<Line> {
@@ -155,7 +158,10 @@ mod tests {
         assert_eq!(rows.first(), Some(&Row::Fold(8)));
         assert_eq!(rows.last(), Some(&Row::Fold(7)));
         assert_eq!(rows.len(), 1 + 2 + 2 + 2 + 1);
-        assert_eq!(fold_context(&diff_lines("a\nb", "a\nb"), 3), vec![Row::Fold(2)]);
+        assert_eq!(
+            fold_context(&diff_lines("a\nb", "a\nb"), 3),
+            vec![Row::Fold(2)]
+        );
     }
 
     #[test]

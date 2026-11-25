@@ -1,8 +1,8 @@
 //! One function per CLI subcommand. They print to stdout; errors bubble up to `main`.
 
 use anyhow::{Result, bail};
-use mcpm_gui::model::{HarnessRow, HarnessState, Plan, ServerRow, SnapRow, Status};
 use mcpm_gui::autostart;
+use mcpm_gui::model::{HarnessRow, HarnessState, Plan, ServerRow, SnapRow, Status};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
@@ -31,7 +31,9 @@ pub fn status(json_mode: bool) -> Result<()> {
             let s: Status = serde_json::from_value(raw.clone())?;
             let mut raw = raw;
             raw["autostart"] = json!(auto);
-            out(json_mode, &raw, || print::status(&s, auto.as_deref(), cfg.port));
+            out(json_mode, &raw, || {
+                print::status(&s, auto.as_deref(), cfg.port)
+            });
         }
         None => {
             let raw = json!({
@@ -39,7 +41,12 @@ pub fn status(json_mode: bool) -> Result<()> {
                 "stateDir": b.core().state_dir, "autostart": auto,
             });
             out(json_mode, &raw, || {
-                print::status_offline(&b.core().state_dir.display().to_string(), cfg.port, cfg.servers.len(), auto.as_deref())
+                print::status_offline(
+                    &b.core().state_dir.display().to_string(),
+                    cfg.port,
+                    cfg.servers.len(),
+                    auto.as_deref(),
+                )
             });
         }
     }
@@ -48,11 +55,19 @@ pub fn status(json_mode: bool) -> Result<()> {
 
 pub fn harnesses(json_mode: bool) -> Result<()> {
     let raw = Backend::open()?.harnesses()?;
-    out(json_mode, &raw, || print::harnesses(&HarnessRow::from_list(&raw)));
+    out(json_mode, &raw, || {
+        print::harnesses(&HarnessRow::from_list(&raw))
+    });
     Ok(())
 }
 
-pub fn takeover(json_mode: bool, harness: Option<String>, all: bool, dry_run: bool, text: bool) -> Result<()> {
+pub fn takeover(
+    json_mode: bool,
+    harness: Option<String>,
+    all: bool,
+    dry_run: bool,
+    text: bool,
+) -> Result<()> {
     let b = Backend::open()?;
     if dry_run {
         let ids = target_ids(&b, harness, all)?;
@@ -60,7 +75,10 @@ pub fn takeover(json_mode: bool, harness: Option<String>, all: bool, dry_run: bo
         let mut plans = vec![];
         for id in ids {
             let raw = b.plan(&id)?;
-            plans.push(Plan::from_value(&raw).ok_or_else(|| anyhow::anyhow!("unexpected plan reply for {id}"))?);
+            plans.push(
+                Plan::from_value(&raw)
+                    .ok_or_else(|| anyhow::anyhow!("unexpected plan reply for {id}"))?,
+            );
             raws.push(strip_plan_bytes(raw));
         }
         let raw = Value::Array(raws);
@@ -68,14 +86,22 @@ pub fn takeover(json_mode: bool, harness: Option<String>, all: bool, dry_run: bo
             if plans.is_empty() {
                 "nothing to take over".to_string()
             } else {
-                let mut s = plans.iter().map(|p| print::plan(p, text)).collect::<Vec<_>>().join("\n");
+                let mut s = plans
+                    .iter()
+                    .map(|p| print::plan(p, text))
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 s.push_str("\n(dry run: nothing written)");
                 s
             }
         });
         return Ok(());
     }
-    let target = if all { "all".to_string() } else { harness.unwrap_or_default() };
+    let target = if all {
+        "all".to_string()
+    } else {
+        harness.unwrap_or_default()
+    };
     let raw = b.apply(&target)?;
     out(json_mode, &raw, || {
         let snaps = match &raw {
@@ -85,7 +111,15 @@ pub fn takeover(json_mode: bool, harness: Option<String>, all: bool, dry_run: bo
         if snaps.is_empty() {
             "nothing to take over".to_string()
         } else {
-            format!("took over {}\n{}", snaps.iter().flat_map(|s| s.harnesses()).collect::<Vec<_>>().join(", "), print::snapshots(&snaps))
+            format!(
+                "took over {}\n{}",
+                snaps
+                    .iter()
+                    .flat_map(|s| s.harnesses())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                print::snapshots(&snaps)
+            )
         }
     });
     Ok(())
@@ -116,7 +150,13 @@ fn target_ids(b: &Backend, harness: Option<String>, all: bool) -> Result<Vec<Str
         .collect())
 }
 
-pub fn restore(json_mode: bool, harness: Option<String>, all: bool, snapshot: Option<String>, keep: bool) -> Result<()> {
+pub fn restore(
+    json_mode: bool,
+    harness: Option<String>,
+    all: bool,
+    snapshot: Option<String>,
+    keep: bool,
+) -> Result<()> {
     let b = Backend::open()?;
     let mut req = if all {
         json!({ "all": true })
@@ -142,7 +182,14 @@ fn restore_text(raw: &Value) -> String {
         .map(|r| {
             let merged = r.get("merged").and_then(Value::as_bool) == Some(true);
             let path = r.get("path").and_then(Value::as_str).unwrap_or("?");
-            format!("restored {path}{}", if merged { " (merged: the harness had edited it since)" } else { "" })
+            format!(
+                "restored {path}{}",
+                if merged {
+                    " (merged: the harness had edited it since)"
+                } else {
+                    ""
+                }
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -150,7 +197,9 @@ fn restore_text(raw: &Value) -> String {
 
 pub fn snapshots(json_mode: bool) -> Result<()> {
     let raw = Backend::open()?.snapshots()?;
-    out(json_mode, &raw, || print::snapshots(&SnapRow::from_list(&raw)));
+    out(json_mode, &raw, || {
+        print::snapshots(&SnapRow::from_list(&raw))
+    });
     Ok(())
 }
 
@@ -222,7 +271,11 @@ pub fn uninstall(json_mode: bool) -> Result<()> {
     steps.push(restore_text(&restored));
     autostart::set(false, &std::env::current_exe()?)?;
     steps.push("autostart off".into());
-    steps.push(if b.shutdown()? { "daemon stopped".into() } else { "daemon was not running".into() });
+    steps.push(if b.shutdown()? {
+        "daemon stopped".into()
+    } else {
+        "daemon was not running".into()
+    });
     let raw = json!({ "ok": true, "restored": restored, "steps": steps });
     out(json_mode, &raw, || steps.join("\n"));
     Ok(())

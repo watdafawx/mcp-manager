@@ -71,7 +71,9 @@ impl App {
     fn publish_context(&self) {
         if let Ok(mut c) = self.shared.ctx.lock() {
             c.page = self.page;
-            c.selected = (self.page == Page::Servers).then(|| self.servers.selected.clone()).flatten();
+            c.selected = (self.page == Page::Servers)
+                .then(|| self.servers.selected.clone())
+                .flatten();
         }
     }
 }
@@ -80,7 +82,9 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Pause polling while minimized.
         let minimized = ctx.input(|i| i.viewport().minimized == Some(true));
-        self.shared.visible.store(!minimized, std::sync::atomic::Ordering::Relaxed);
+        self.shared
+            .visible
+            .store(!minimized, std::sync::atomic::Ordering::Relaxed);
         self.drain();
         if self.data.quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -93,31 +97,33 @@ impl eframe::App for App {
         self.publish_context();
         let pal = Palette::of(ui);
 
-        egui::Panel::left("nav").exact_size(168.0).resizable(false).show(ui, |ui| {
-            ui.add_space(10.0);
-            ui.label(RichText::new("MCP Manager").heading());
-            ui.add_space(10.0);
-            for p in Page::ALL {
-                let label = match p {
-                    Page::Servers => format!("Servers  {}", self.data.servers.len()),
-                    Page::Harnesses => {
-                        let n = self.data.harnesses.iter().filter(|h| h.detected).count();
-                        format!("Harnesses  {n}")
+        egui::Panel::left("nav")
+            .exact_size(168.0)
+            .resizable(false)
+            .show(ui, |ui| {
+                ui.add_space(10.0);
+                ui.label(RichText::new("MCP Manager").heading());
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for p in Page::ALL {
+                        let label = match p {
+                            Page::Servers => format!("Servers  {}", self.data.servers.len()),
+                            Page::Harnesses => {
+                                let n = self.data.harnesses.iter().filter(|h| h.detected).count();
+                                format!("Harnesses  {n}")
+                            }
+                            Page::Snapshots => format!("Snapshots  {}", self.data.snapshots.len()),
+                            Page::Settings => "Settings".to_string(),
+                        };
+                        let b = egui::Button::selectable(self.page == p, label)
+                            .frame_when_inactive(false)
+                            .min_size(egui::vec2(0.0, 30.0));
+                        if ui.add(b).clicked() {
+                            self.page = p;
+                        }
                     }
-                    Page::Snapshots => format!("Snapshots  {}", self.data.snapshots.len()),
-                    Page::Settings => "Settings".to_string(),
-                };
-                if ui
-                    .add_sized(
-                        [ui.available_width(), 30.0],
-                        egui::Button::selectable(self.page == p, label).frame_when_inactive(false),
-                    )
-                    .clicked()
-                {
-                    self.page = p;
-                }
-            }
-        });
+                });
+            });
 
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui, &pal));
 
@@ -180,15 +186,17 @@ impl App {
     }
 
     fn offline_banner(&mut self, ui: &mut Ui, pal: &Palette, msg: &str) {
-        egui::Frame::group(ui.style()).stroke(egui::Stroke::new(1.0, pal.err)).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Daemon not running.").strong().color(pal.err));
-                ui.label(RichText::new(msg).small().color(pal.muted));
-                if ui.button("Start daemon").clicked() {
-                    self.send(Job::Start);
-                }
+        egui::Frame::group(ui.style())
+            .stroke(egui::Stroke::new(1.0, pal.err))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Daemon not running.").strong().color(pal.err));
+                    ui.label(RichText::new(msg).small().color(pal.muted));
+                    if ui.button("Start daemon").clicked() {
+                        self.send(Job::Start);
+                    }
+                });
             });
-        });
         ui.add_space(6.0);
     }
 
@@ -207,15 +215,17 @@ impl App {
                         Level::Error => (pal.err, "error"),
                         Level::Info => (pal.ok, "ok"),
                     };
-                    egui::Frame::popup(ui.style()).stroke(egui::Stroke::new(1.5, accent)).show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(tag).small().strong().color(accent));
-                            ui.label(&t.text);
-                            if ui.small_button("✕").clicked() {
-                                dismiss = Some(t.id);
-                            }
+                    egui::Frame::popup(ui.style())
+                        .stroke(egui::Stroke::new(1.5, accent))
+                        .show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(RichText::new(tag).small().strong().color(accent));
+                                ui.label(&t.text);
+                                if ui.small_button("×").clicked() {
+                                    dismiss = Some(t.id);
+                                }
+                            });
                         });
-                    });
                 }
             });
         if let Some(id) = dismiss {
@@ -234,7 +244,8 @@ pub fn modal(ctx: &egui::Context, title: &str, add: impl FnOnce(&mut Ui)) {
 }
 
 pub fn path_label(ui: &mut Ui, pal: &Palette, path: &str) {
-    ui.label(RichText::new(path).monospace().small().color(pal.muted)).on_hover_text(path);
+    ui.label(RichText::new(path).monospace().small().color(pal.muted))
+        .on_hover_text(path);
 }
 
 pub fn colored(text: &str, color: Color32) -> RichText {

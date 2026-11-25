@@ -25,7 +25,11 @@ pub fn show(app: &mut App, ui: &mut Ui, pal: &Palette) {
 
     let online = app.data.conn == ConnState::Online;
     let status = app.data.status.clone();
-    let harness_in_use = app.data.harnesses.iter().any(|h| h.state != HarnessState::NotConnected);
+    let harness_in_use = app
+        .data
+        .harnesses
+        .iter()
+        .any(|h| h.state != HarnessState::NotConnected);
     let exe = std::env::current_exe().unwrap_or_default();
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -165,5 +169,8 @@ fn open_folder(dir: &std::path::Path) -> std::io::Result<()> {
     let program = "explorer";
     #[cfg(not(windows))]
     let program = "xdg-open";
-    std::process::Command::new(program).arg(dir).spawn().map(|_| ())
+    std::process::Command::new(program)
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
 }

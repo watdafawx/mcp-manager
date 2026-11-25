@@ -12,9 +12,7 @@ use serde_json::{Value, json};
 
 use crate::autostart;
 use crate::client::{self, ApiError, Conn};
-use crate::model::{
-    CallRow, HarnessRow, HarnessState, Plan, ServerRow, SnapRow, Status, ToolInfo,
-};
+use crate::model::{CallRow, HarnessRow, HarnessState, Plan, ServerRow, SnapRow, Status, ToolInfo};
 use crate::state::{Level, Msg, Page, PlanView};
 
 pub const POLL_EVERY: Duration = Duration::from_secs(2);
@@ -36,7 +34,10 @@ pub struct Shared {
 
 impl Shared {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { visible: AtomicBool::new(true), ctx: Mutex::new(PollCtx::default()) })
+        Arc::new(Self {
+            visible: AtomicBool::new(true),
+            ctx: Mutex::new(PollCtx::default()),
+        })
     }
 }
 
@@ -52,17 +53,26 @@ pub enum Job {
     /// Connect (starting the daemon if needed) and load everything.
     Start,
     Refresh,
-    SetEnabled { id: String, on: bool },
+    SetEnabled {
+        id: String,
+        on: bool,
+    },
     Restart(String),
     Remove(String),
     /// Add (`editing == false`) or update a server.
-    Save { editing: bool, cfg: Box<ServerConfig> },
+    Save {
+        editing: bool,
+        cfg: Box<ServerConfig>,
+    },
     LoadTools(String),
     Reveal(String),
     /// Dry run for one harness id, or `"all"`.
     PlanTakeover(String),
     ApplyTakeover(String),
-    Restore { target: RestoreTarget, keep: bool },
+    Restore {
+        target: RestoreTarget,
+        keep: bool,
+    },
     DeleteSnapshot(String),
     SetPort(u16),
     SetAutostart(bool),
@@ -105,7 +115,12 @@ fn parse<T: serde::de::DeserializeOwned>(v: Value, what: &str) -> Result<T, ApiE
 
 impl Runner {
     fn new(cfg: WorkerCfg) -> Self {
-        Self { cfg, conn: None, harnesses: Vec::new(), tick: 0 }
+        Self {
+            cfg,
+            conn: None,
+            harnesses: Vec::new(),
+            tick: 0,
+        }
     }
 
     fn send(&self, m: Msg) {
@@ -140,7 +155,8 @@ impl Runner {
         if let Some(c) = &self.conn {
             return Ok(c.clone());
         }
-        let c = client::locate(&self.cfg.home).ok_or_else(|| ApiError::net("the daemon is not running"))?;
+        let c = client::locate(&self.cfg.home)
+            .ok_or_else(|| ApiError::net("the daemon is not running"))?;
         self.conn = Some(c.clone());
         Ok(c)
     }
@@ -236,12 +252,20 @@ impl Runner {
         if self.conn.is_none() && client::locate(&self.cfg.home).is_none() {
             return; // stays offline until the user starts the daemon
         }
-        let ctx = self.cfg.shared.ctx.lock().map(|c| c.clone()).unwrap_or_default();
+        let ctx = self
+            .cfg
+            .shared
+            .ctx
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_default();
         let mut r = self.refresh_status().and_then(|_| self.refresh_servers());
         if r.is_ok() {
             // File-reading views refresh less often than the live server state.
             let slow = self.tick.is_multiple_of(3);
-            if matches!(ctx.page, Page::Harnesses | Page::Servers) && (slow || self.harnesses.is_empty()) {
+            if matches!(ctx.page, Page::Harnesses | Page::Servers)
+                && (slow || self.harnesses.is_empty())
+            {
                 r = self.refresh_harnesses();
             }
             if r.is_ok() && ctx.page == Page::Snapshots && slow {
@@ -288,7 +312,10 @@ impl Runner {
                 (r.map(|_| None), true)
             }
             Job::Restart(id) => {
-                let r = self.call(|c| c.slow().post(&format!("/api/servers/{id}/restart"), &json!({})));
+                let r = self.call(|c| {
+                    c.slow()
+                        .post(&format!("/api/servers/{id}/restart"), &json!({}))
+                });
                 (r.map(|_| Some(format!("Restarted {id}"))), true)
             }
             Job::Remove(id) => {
@@ -303,7 +330,11 @@ impl Runner {
                 } else {
                     self.call(|c| c.post("/api/servers", &body))
                 };
-                let text = if editing { format!("Saved {id}") } else { format!("Added {id}") };
+                let text = if editing {
+                    format!("Saved {id}")
+                } else {
+                    format!("Added {id}")
+                };
                 (r.map(|_| Some(text)), true)
             }
             Job::LoadTools(id) => {
@@ -320,7 +351,10 @@ impl Runner {
                 let r = r.and_then(|v| parse::<ServerConfig>(v, "server"));
                 match r {
                     Ok(cfg) => {
-                        self.send(Msg::Revealed { id, cfg: Box::new(cfg) });
+                        self.send(Msg::Revealed {
+                            id,
+                            cfg: Box::new(cfg),
+                        });
                         (Ok(None), false)
                     }
                     Err(e) => (Err(e), false),
@@ -328,7 +362,11 @@ impl Runner {
             }
             Job::PlanTakeover(target) => (self.plan(&target), false),
             Job::ApplyTakeover(target) => {
-                let body = if target == "all" { json!({ "all": true }) } else { json!({ "harness": target }) };
+                let body = if target == "all" {
+                    json!({ "all": true })
+                } else {
+                    json!({ "harness": target })
+                };
                 let r = self.call(|c| c.slow().post("/api/takeover/apply", &body));
                 let text = if target == "all" {
                     "Took over every detected harness".to_string()
@@ -358,7 +396,10 @@ impl Runner {
                     .and_then(|exe| autostart::set(on, &exe));
                 self.send(Msg::Autostart(autostart::current().unwrap_or(None)));
                 match r {
-                    Ok(()) => (Ok(Some(format!("Autostart {}", if on { "on" } else { "off" }))), false),
+                    Ok(()) => (
+                        Ok(Some(format!("Autostart {}", if on { "on" } else { "off" }))),
+                        false,
+                    ),
                     Err(e) => (Err(ApiError::net(format!("autostart: {e:#}"))), false),
                 }
             }
@@ -383,7 +424,11 @@ impl Runner {
         } else {
             vec![target.to_string()]
         };
-        let mut view = PlanView { target: target.to_string(), plans: vec![], errors: vec![] };
+        let mut view = PlanView {
+            target: target.to_string(),
+            plans: vec![],
+            errors: vec![],
+        };
         for id in ids {
             match self.call(|c| c.post("/api/takeover/plan", &json!({ "harness": id }))) {
                 Ok(v) => match Plan::from_value(&v) {
@@ -433,7 +478,10 @@ impl Runner {
     /// Restore every harness, remove autostart, stop the daemon, then close the window.
     fn uninstall(&mut self) -> Result<Option<String>, ApiError> {
         self.call(|c| {
-            c.slow().post("/api/restore", &json!({ "all": true, "keepInManager": false }))
+            c.slow().post(
+                "/api/restore",
+                &json!({ "all": true, "keepInManager": false }),
+            )
         })?;
         autostart::set(false, std::path::Path::new(""))
             .map_err(|e| ApiError::net(format!("autostart: {e:#}")))?;
@@ -449,7 +497,11 @@ pub fn restore_summary(v: &Value) -> String {
     let files = v.as_array().map(Vec::len).unwrap_or(0);
     let merged = v
         .as_array()
-        .map(|a| a.iter().filter(|r| r.get("merged").and_then(Value::as_bool) == Some(true)).count())
+        .map(|a| {
+            a.iter()
+                .filter(|r| r.get("merged").and_then(Value::as_bool) == Some(true))
+                .count()
+        })
         .unwrap_or(0);
     let mut s = format!("Restored {files} file{}", if files == 1 { "" } else { "s" });
     if merged > 0 {
@@ -469,6 +521,9 @@ mod tests {
             restore_summary(&json!([{"path":"a","merged":false},{"path":"b","merged":true}])),
             "Restored 2 files (1 merged with newer edits)"
         );
-        assert_eq!(restore_summary(&json!([{"path":"a","merged":false}])), "Restored 1 file");
+        assert_eq!(
+            restore_summary(&json!([{"path":"a","merged":false}])),
+            "Restored 1 file"
+        );
     }
 }

@@ -34,7 +34,11 @@ pub fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
 fn transport_text(t: &Transport) -> String {
     match t {
         Transport::Stdio { command, args, .. } => {
-            if args.is_empty() { format!("stdio {command}") } else { format!("stdio {command} {}", args.join(" ")) }
+            if args.is_empty() {
+                format!("stdio {command}")
+            } else {
+                format!("stdio {command} {}", args.join(" "))
+            }
         }
         Transport::Http { url, .. } => format!("http {url}"),
     }
@@ -49,15 +53,26 @@ pub fn servers(rows: &[ServerRow]) -> String {
         .map(|r| {
             vec![
                 r.cfg.id.clone(),
-                if r.cfg.enabled { "on".into() } else { "off".into() },
+                if r.cfg.enabled {
+                    "on".into()
+                } else {
+                    "off".into()
+                },
                 r.state.label().to_string(),
                 r.tool_count.to_string(),
-                if r.cfg.harnesses.is_empty() { "all".into() } else { r.cfg.harnesses.join(",") },
+                if r.cfg.harnesses.is_empty() {
+                    "all".into()
+                } else {
+                    r.cfg.harnesses.join(",")
+                },
                 transport_text(&r.cfg.transport),
             ]
         })
         .collect();
-    table(&["ID", "ENABLED", "STATE", "TOOLS", "HARNESSES", "TRANSPORT"], &body)
+    table(
+        &["ID", "ENABLED", "STATE", "TOOLS", "HARNESSES", "TRANSPORT"],
+        &body,
+    )
 }
 
 pub fn harnesses(rows: &[HarnessRow]) -> String {
@@ -67,7 +82,11 @@ pub fn harnesses(rows: &[HarnessRow]) -> String {
             let foreign = h.foreign_entries();
             vec![
                 h.id.clone(),
-                if h.detected { h.state.label().to_string() } else { "not detected".into() },
+                if h.detected {
+                    h.state.label().to_string()
+                } else {
+                    "not detected".into()
+                },
                 foreign.len().to_string(),
                 h.main_path().to_string(),
             ]
@@ -92,7 +111,10 @@ pub fn snapshots(rows: &[SnapRow]) -> String {
             ]
         })
         .collect();
-    table(&["ID", "WHEN (UTC)", "OPERATION", "HARNESS", "FILES"], &body)
+    table(
+        &["ID", "WHEN (UTC)", "OPERATION", "HARNESS", "FILES"],
+        &body,
+    )
 }
 
 /// Dry-run summary of one takeover plan.
@@ -141,7 +163,12 @@ pub fn status(s: &Status, autostart: Option<&str>, config_port: u16) -> String {
     out
 }
 
-pub fn status_offline(state_dir: &str, port: u16, servers: usize, autostart: Option<&str>) -> String {
+pub fn status_offline(
+    state_dir: &str,
+    port: u16,
+    servers: usize,
+    autostart: Option<&str>,
+) -> String {
     format!(
         "daemon:    not running\nport:      {port} (configured)\nservers:   {servers} (in config.json)\nstate dir: {state_dir}\nautostart: {}",
         autostart.unwrap_or("off")
@@ -155,7 +182,13 @@ mod tests {
 
     #[test]
     fn table_aligns_columns_and_trims_the_tail() {
-        let t = table(&["A", "BB"], &[vec!["xxx".into(), "1".into()], vec!["y".into(), "22".into()]]);
+        let t = table(
+            &["A", "BB"],
+            &[
+                vec!["xxx".into(), "1".into()],
+                vec!["y".into(), "22".into()],
+            ],
+        );
         assert_eq!(t, "A    BB\nxxx  1\ny    22");
     }
 
@@ -170,7 +203,9 @@ mod tests {
         let t = servers(&rows);
         let lines: Vec<&str> = t.lines().collect();
         assert!(lines[0].starts_with("ID"));
-        assert!(lines[1].contains("fs") && lines[1].contains("running") && lines[1].contains("all"));
+        assert!(
+            lines[1].contains("fs") && lines[1].contains("running") && lines[1].contains("all")
+        );
         assert!(lines[1].ends_with("stdio npx -y x"));
         assert!(lines[2].contains("off") && lines[2].contains("claude,codex"));
         assert_eq!(servers(&[]), "no servers");
@@ -183,17 +218,24 @@ mod tests {
             {"id":"codex","label":"Codex","detected":false,"state":"notConnected","files":[{"path":"p2","entries":[]}]}
         ]));
         let t = harnesses(&h);
-        assert!(t.lines().nth(1).unwrap().contains("taken over") && t.lines().nth(1).unwrap().contains("p1"));
+        assert!(
+            t.lines().nth(1).unwrap().contains("taken over")
+                && t.lines().nth(1).unwrap().contains("p1")
+        );
         assert!(t.lines().nth(2).unwrap().contains("not detected"));
-        let s = SnapRow::from_list(&json!([{"id":"1-a","timestamp":0,"operation":"takeover","files":[{"harness":"cursor","file":{"path":"p"},"existed":true}]}]));
+        let s = SnapRow::from_list(
+            &json!([{"id":"1-a","timestamp":0,"operation":"takeover","files":[{"harness":"cursor","file":{"path":"p"},"existed":true}]}]),
+        );
         assert!(snapshots(&s).contains("1970-01-01 00:00:00"));
     }
 
     #[test]
     fn plan_summary_and_text() {
-        let p = Plan::from_value(&json!({"harness":"cursor","files":[{"file":{"path":"C:/c.json"},
+        let p = Plan::from_value(
+            &json!({"harness":"cursor","files":[{"file":{"path":"C:/c.json"},
             "imports":[{"id":"fs","name":"fs","transport":{"type":"http","url":"http://x"}}],
-            "remove":["fs"],"final_text":"{\n  \"a\": 1\n}"}]}))
+            "remove":["fs"],"final_text":"{\n  \"a\": 1\n}"}]}),
+        )
         .unwrap();
         let short = plan(&p, false);
         assert!(short.starts_with("cursor: import 1 server, remove 1 entry"));
@@ -204,7 +246,14 @@ mod tests {
 
     #[test]
     fn status_text_lists_autostart() {
-        let s = Status { pid: 7, version: "0.1.0".into(), port: 39494, servers: 2, enabled_servers: 1, ..Default::default() };
+        let s = Status {
+            pid: 7,
+            version: "0.1.0".into(),
+            port: 39494,
+            servers: 2,
+            enabled_servers: 1,
+            ..Default::default()
+        };
         let t = status(&s, Some("\"x\" daemon"), 39494);
         assert!(t.contains("pid 7") && t.contains("autostart: \"x\" daemon"));
         assert!(status_offline("d", 1, 0, None).contains("not running"));

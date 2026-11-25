@@ -2,8 +2,8 @@
 
 use eframe::egui::{self, RichText, Ui};
 
-use crate::app::{modal, path_label};
 use crate::app::App;
+use crate::app::{modal, path_label};
 use crate::model::{HarnessRow, HarnessState, Plan};
 use crate::state::PlanView;
 use crate::theme::{self, Palette};
@@ -30,12 +30,26 @@ pub fn show(app: &mut App, ui: &mut Ui, pal: &Palette) {
     ui.horizontal(|ui| {
         ui.heading("Harnesses");
         theme::right(ui, |ui| {
-            let any_taken = app.data.harnesses.iter().any(|h| h.state == HarnessState::TakenOver);
-            if ui.add_enabled(any_taken, egui::Button::new("Restore all")).clicked() {
+            let any_taken = app
+                .data
+                .harnesses
+                .iter()
+                .any(|h| h.state == HarnessState::TakenOver);
+            if ui
+                .add_enabled(any_taken, egui::Button::new("Restore all"))
+                .clicked()
+            {
                 restore_all = true;
             }
-            let any_free = app.data.harnesses.iter().any(|h| h.detected && h.state != HarnessState::TakenOver);
-            if ui.add_enabled(any_free, egui::Button::new("Take over all")).clicked() {
+            let any_free = app
+                .data
+                .harnesses
+                .iter()
+                .any(|h| h.detected && h.state != HarnessState::TakenOver);
+            if ui
+                .add_enabled(any_free, egui::Button::new("Take over all"))
+                .clicked()
+            {
                 plan_for = Some("all".into());
             }
             if ui.button("Refresh").clicked() {
@@ -54,33 +68,34 @@ pub fn show(app: &mut App, ui: &mut Ui, pal: &Palette) {
     ui.add_space(6.0);
 
     let harnesses = app.data.harnesses.clone();
-    let (detected, other): (Vec<&HarnessRow>, Vec<&HarnessRow>) = harnesses.iter().partition(|h| h.detected);
+    let (detected, other): (Vec<&HarnessRow>, Vec<&HarnessRow>) =
+        harnesses.iter().partition(|h| h.detected);
     let mut restore_for: Option<String> = None;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        if harnesses.is_empty() {
-            ui.label(RichText::new("No harness information yet.").color(pal.muted));
-        }
-        let width = ((ui.available_width() - 12.0) / 2.0).max(320.0);
-        ui.horizontal_wrapped(|ui| {
-            for h in &detected {
-                card(ui, pal, h, width, &mut plan_for, &mut restore_for);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if harnesses.is_empty() {
+                ui.label(RichText::new("No harness information yet.").color(pal.muted));
+            }
+            card_grid(
+                ui,
+                "detected",
+                pal,
+                &detected,
+                &mut plan_for,
+                &mut restore_for,
+            );
+            if !other.is_empty() {
+                ui.add_space(6.0);
+                let label = format!("{} not detected on this PC", other.len());
+                egui::CollapsingHeader::new(label)
+                    .id_salt("undetected")
+                    .default_open(app.harnesses.show_undetected)
+                    .show(ui, |ui| {
+                        card_grid(ui, "other", pal, &other, &mut plan_for, &mut restore_for)
+                    });
             }
         });
-        if !other.is_empty() {
-            ui.add_space(6.0);
-            let label = format!("{} not detected on this PC", other.len());
-            egui::CollapsingHeader::new(label)
-                .id_salt("undetected")
-                .default_open(app.harnesses.show_undetected)
-                .show(ui, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        for h in &other {
-                            card(ui, pal, h, width, &mut plan_for, &mut restore_for);
-                        }
-                    });
-                });
-        }
-    });
 
     if let Some(t) = plan_for {
         app.data.plan = None;
@@ -102,6 +117,33 @@ pub fn show(app: &mut App, ui: &mut Ui, pal: &Palette) {
     restore_window(app, ui.ctx(), pal);
 }
 
+/// Equal-width cards in as many columns as fit (a plain wrapped layout lets cards grow without bound).
+fn card_grid(
+    ui: &mut Ui,
+    id: &str,
+    pal: &Palette,
+    list: &[&HarnessRow],
+    plan_for: &mut Option<String>,
+    restore_for: &mut Option<String>,
+) {
+    const MIN_W: f32 = 430.0;
+    const GAP: f32 = 10.0;
+    let avail = ui.available_width().max(MIN_W);
+    let cols = (((avail + GAP) / (MIN_W + GAP)).floor() as usize).max(1);
+    let width = (avail - GAP * (cols as f32 - 1.0)) / cols as f32;
+    egui::Grid::new(id)
+        .num_columns(cols)
+        .spacing([GAP, GAP])
+        .show(ui, |ui| {
+            for (i, h) in list.iter().enumerate() {
+                card(ui, pal, h, width, plan_for, restore_for);
+                if (i + 1) % cols == 0 {
+                    ui.end_row();
+                }
+            }
+        });
+}
+
 fn card(
     ui: &mut Ui,
     pal: &Palette,
@@ -111,8 +153,23 @@ fn card(
     restore_for: &mut Option<String>,
 ) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
+        // Grid cells lay out left-to-right; the card stacks its rows.
         ui.set_width(width - 20.0);
-        ui.set_min_height(104.0);
+        ui.set_min_height(110.0);
+        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+            card_body(ui, pal, h, plan_for, restore_for)
+        });
+    });
+}
+
+fn card_body(
+    ui: &mut Ui,
+    pal: &Palette,
+    h: &HarnessRow,
+    plan_for: &mut Option<String>,
+    restore_for: &mut Option<String>,
+) {
+    {
         ui.horizontal(|ui| {
             ui.label(RichText::new(&h.label).strong().size(15.0));
             ui.label(RichText::new(&h.id).small().color(pal.muted));
@@ -134,21 +191,39 @@ fn card(
         } else {
             let shown: Vec<&str> = foreign.iter().copied().take(6).collect();
             let more = foreign.len().saturating_sub(shown.len());
-            let tail = if more > 0 { format!(" +{more} more") } else { String::new() };
-            format!("{} entr{} found: {}{tail}", foreign.len(), if foreign.len() == 1 { "y" } else { "ies" }, shown.join(", "))
+            let tail = if more > 0 {
+                format!(" +{more} more")
+            } else {
+                String::new()
+            };
+            format!(
+                "{} entr{} found: {}{tail}",
+                foreign.len(),
+                if foreign.len() == 1 { "y" } else { "ies" },
+                shown.join(", ")
+            )
         };
         ui.label(RichText::new(entries).small());
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let can_take = h.detected && h.state != HarnessState::TakenOver;
-            if ui.add_enabled(can_take, egui::Button::new("Take over…")).clicked() {
+            if ui
+                .add_enabled(can_take, egui::Button::new("Take over…"))
+                .clicked()
+            {
                 *plan_for = Some(h.id.clone());
             }
-            if ui.add_enabled(h.state == HarnessState::TakenOver, egui::Button::new("Restore…")).clicked() {
+            if ui
+                .add_enabled(
+                    h.state == HarnessState::TakenOver,
+                    egui::Button::new("Restore…"),
+                )
+                .clicked()
+            {
                 *restore_for = Some(h.id.clone());
             }
         });
-    });
+    }
 }
 
 fn plan_window(app: &mut App, ctx: &egui::Context, pal: &Palette) {
@@ -168,7 +243,11 @@ fn plan_window(app: &mut App, ctx: &egui::Context, pal: &Palette) {
     };
     let mut apply = false;
     let mut cancel = false;
-    let title = if view.target == "all" { "Take over all harnesses".to_string() } else { format!("Take over {}", view.target) };
+    let title = if view.target == "all" {
+        "Take over all harnesses".to_string()
+    } else {
+        format!("Take over {}", view.target)
+    };
     let tab = &mut app.harnesses.plan_tab;
     egui::Window::new(title)
         .collapsible(false)
@@ -182,7 +261,10 @@ fn plan_window(app: &mut App, ctx: &egui::Context, pal: &Palette) {
             ui.horizontal(|ui| {
                 let nothing = view.plans.is_empty();
                 if ui
-                    .add_enabled(!nothing, egui::Button::new(RichText::new("Apply takeover").strong()))
+                    .add_enabled(
+                        !nothing,
+                        egui::Button::new(RichText::new("Apply takeover").strong()),
+                    )
                     .on_hover_text("Snapshots every file first, then writes once per file")
                     .clicked()
                 {
@@ -233,13 +315,21 @@ fn plan_body(ui: &mut Ui, pal: &Palette, view: &PlanView, tab: &mut usize) {
     for f in &plan.files {
         path_label(ui, pal, &f.path);
         if f.imports.is_empty() {
-            ui.label(RichText::new("no servers to import from this file").small().color(pal.muted));
+            ui.label(
+                RichText::new("no servers to import from this file")
+                    .small()
+                    .color(pal.muted),
+            );
         } else {
             let names: Vec<String> = f.imports.iter().map(|s| s.name.clone()).collect();
             ui.label(RichText::new(format!("imports: {}", names.join(", "))).small());
         }
         if !f.remove.is_empty() {
-            ui.label(RichText::new(format!("removes: {}", f.remove.join(", "))).small().color(pal.del));
+            ui.label(
+                RichText::new(format!("removes: {}", f.remove.join(", ")))
+                    .small()
+                    .color(pal.del),
+            );
         }
     }
     ui.add_space(4.0);
@@ -261,14 +351,18 @@ fn plan_body(ui: &mut Ui, pal: &Palette, view: &PlanView, tab: &mut usize) {
         });
         if lines.len() > shown {
             ui.label(
-                RichText::new(format!("… {} more lines not shown", lines.len() - shown)).small().color(pal.muted),
+                RichText::new(format!("… {} more lines not shown", lines.len() - shown))
+                    .small()
+                    .color(pal.muted),
             );
         }
     }
 }
 
 fn restore_window(app: &mut App, ctx: &egui::Context, pal: &Palette) {
-    let Some((target, mut keep)) = app.harnesses.restore.clone() else { return };
+    let Some((target, mut keep)) = app.harnesses.restore.clone() else {
+        return;
+    };
     let title = match &target {
         RestoreTarget::Harness(h) => format!("Restore {h}"),
         RestoreTarget::All => "Restore all harnesses".to_string(),
@@ -294,7 +388,10 @@ fn restore_window(app: &mut App, ctx: &egui::Context, pal: &Palette) {
         });
     });
     if go {
-        app.send(Job::Restore { target: target.clone(), keep });
+        app.send(Job::Restore {
+            target: target.clone(),
+            keep,
+        });
     }
     app.harnesses.restore = if done { None } else { Some((target, keep)) };
 }

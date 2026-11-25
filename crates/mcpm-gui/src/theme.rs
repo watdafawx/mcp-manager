@@ -1,8 +1,8 @@
 //! Look: follows the system light/dark preference (egui default), a muted palette on top.
 
 use eframe::egui::{
-    self, Align, Color32, CursorIcon, Layout, Pos2, Response, RichText, Sense, Stroke, StrokeKind, Ui,
-    vec2,
+    self, Align, Color32, CursorIcon, Layout, Pos2, Response, RichText, Sense, Stroke, StrokeKind,
+    Ui, vec2,
 };
 
 use crate::model::RunState;
@@ -69,11 +69,30 @@ impl Palette {
 
 /// One-time style tweaks (spacing and rounding only; colours come from the system theme).
 pub fn apply(ctx: &egui::Context) {
+    // Default follows the system. `MCPM_THEME=light|dark` forces one (screenshots, odd setups).
+    match std::env::var("MCPM_THEME").ok().as_deref().map(str::trim) {
+        Some("light") => ctx.set_theme(egui::ThemePreference::Light),
+        Some("dark") => ctx.set_theme(egui::ThemePreference::Dark),
+        _ => {}
+    }
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = vec2(8.0, 6.0);
         s.spacing.button_padding = vec2(10.0, 4.0);
         s.spacing.interact_size.y = 24.0;
         s.spacing.scroll.floating = true;
+        // egui's defaults are small on a 4K/200% screen: one step up everywhere.
+        use egui::{FontId, TextStyle};
+        for (style, size) in [
+            (TextStyle::Small, 12.0),
+            (TextStyle::Body, 14.5),
+            (TextStyle::Button, 14.5),
+            (TextStyle::Monospace, 13.5),
+            (TextStyle::Heading, 21.0),
+        ] {
+            if let Some(f) = s.text_styles.get_mut(&style) {
+                *f = FontId::new(size, f.family.clone());
+            }
+        }
     });
 }
 
@@ -90,14 +109,22 @@ pub fn switch(ui: &mut Ui, on: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool_responsive(resp.id, on);
-        let off = ui.visuals().widgets.inactive.bg_fill;
-        let onc = ui.visuals().selection.bg_fill;
+        // White knob on a track that stays readable in both themes.
+        let (off, onc) = if ui.visuals().dark_mode {
+            (
+                ui.visuals().widgets.inactive.bg_fill,
+                ui.visuals().selection.bg_fill,
+            )
+        } else {
+            (Color32::from_gray(185), Color32::from_rgb(0, 118, 168))
+        };
         let fill = off.lerp_to_gamma(onc, t);
         let r = rect.height() / 2.0;
-        ui.painter().rect(rect, r, fill, Stroke::NONE, StrokeKind::Inside);
+        ui.painter()
+            .rect(rect, r, fill, Stroke::NONE, StrokeKind::Inside);
         let x = egui::lerp((rect.left() + r)..=(rect.right() - r), t);
-        let knob = ui.visuals().widgets.active.fg_stroke.color;
-        ui.painter().circle_filled(Pos2::new(x, rect.center().y), r - 2.5, knob);
+        ui.painter()
+            .circle_filled(Pos2::new(x, rect.center().y), r - 2.5, Color32::WHITE);
     }
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
@@ -106,8 +133,13 @@ pub fn switch(ui: &mut Ui, on: bool) -> Response {
 pub fn badge(ui: &mut Ui, text: &str, on: bool) -> Response {
     let rich = RichText::new(text).small();
     let rich = if on { rich.strong() } else { rich.weak() };
-    ui.add(egui::Button::new(rich).selected(on).corner_radius(10.0).min_size(vec2(0.0, 20.0)))
-        .on_hover_cursor(CursorIcon::PointingHand)
+    ui.add(
+        egui::Button::new(rich)
+            .selected(on)
+            .corner_radius(10.0)
+            .min_size(vec2(0.0, 20.0)),
+    )
+    .on_hover_cursor(CursorIcon::PointingHand)
 }
 
 /// A muted section title.
@@ -123,5 +155,6 @@ pub fn danger_button(ui: &mut Ui, pal: &Palette, text: &str) -> Response {
 
 /// Right-aligned strip inside a horizontal row.
 pub fn right<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.with_layout(Layout::right_to_left(Align::Center), add).inner
+    ui.with_layout(Layout::right_to_left(Align::Center), add)
+        .inner
 }

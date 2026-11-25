@@ -81,7 +81,12 @@ impl ServerForm {
     /// Replaces command/args/env/url/headers (used when toggling secret reveal).
     pub fn load_transport(&mut self, t: &Transport) {
         match t {
-            Transport::Stdio { command, args, env, cwd } => {
+            Transport::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => {
                 self.kind = Kind::Stdio;
                 self.command = command.clone();
                 self.args = args.join("\n");
@@ -99,7 +104,10 @@ impl ServerForm {
     pub fn to_config(&self) -> Result<ServerConfig, String> {
         let id = self.id.trim().to_string();
         if !valid_server_id(&id) {
-            return Err("id: use letters, digits, `-` or `_` (max 48, must start with a letter or digit)".into());
+            return Err(
+                "id: use letters, digits, `-` or `_` (max 48, must start with a letter or digit)"
+                    .into(),
+            );
         }
         let transport = match self.kind {
             Kind::Stdio => {
@@ -127,12 +135,19 @@ impl ServerForm {
                 if !(url.starts_with("http://") || url.starts_with("https://")) {
                     return Err("url must start with http:// or https://".into());
                 }
-                Transport::Http { url, headers: to_map(&self.headers) }
+                Transport::Http {
+                    url,
+                    headers: to_map(&self.headers),
+                }
             }
         };
         let name = self.name.trim();
         Ok(ServerConfig {
-            name: if name.is_empty() { id.clone() } else { name.to_string() },
+            name: if name.is_empty() {
+                id.clone()
+            } else {
+                name.to_string()
+            },
             id,
             transport,
             enabled: self.enabled,
@@ -163,8 +178,19 @@ mod tests {
     fn stdio_form_to_config() {
         let c = stdio().to_config().unwrap();
         assert_eq!(c.name, "fs");
-        let Transport::Stdio { command, args, env, cwd } = c.transport else { panic!() };
-        assert_eq!((command.as_str(), args.len(), env.len(), cwd), ("npx", 2, 1, None));
+        let Transport::Stdio {
+            command,
+            args,
+            env,
+            cwd,
+        } = c.transport
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (command.as_str(), args.len(), env.len(), cwd),
+            ("npx", 2, 1, None)
+        );
     }
 
     #[test]
@@ -175,7 +201,12 @@ mod tests {
         let mut f = stdio();
         f.command = " ".into();
         assert!(f.to_config().is_err());
-        let f = ServerForm { id: "h".into(), kind: Kind::Http, url: "ftp://x".into(), ..Default::default() };
+        let f = ServerForm {
+            id: "h".into(),
+            kind: Kind::Http,
+            url: "ftp://x".into(),
+            ..Default::default()
+        };
         assert!(f.to_config().is_err());
     }
 
