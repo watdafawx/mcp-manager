@@ -9,15 +9,7 @@ pub use mcpm_core::store::{load as load_config, save as save_config};
 
 /// Filesystem context for core operations, from the user's profile (`MCPM_HOME` honoured).
 pub fn core_context() -> mcpm_core::Core {
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let appdata = std::env::var_os("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join("AppData").join("Roaming"));
-    let state_dir = mcpm_core::paths::state_dir(&home, &appdata);
-    mcpm_core::Core { home, appdata, state_dir }
+    mcpm_core::Core::from_env()
 }
 
 /// State dir: `MCPM_HOME`, else `%APPDATA%\mcpm` (see `mcpm_core::paths::state_dir`).

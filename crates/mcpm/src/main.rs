@@ -1,73 +1,17 @@
 #![windows_subsystem = "windows"]
-//! `mcpm` entry point. Subcommands in SPEC.md. Only `daemon` and `bridge` exist so far.
+//! `mcpm` entry point. Subcommands in SPEC.md.
+
+mod backend;
+mod cli;
+mod commands;
+mod print;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
-#[derive(Parser)]
-#[command(
-    name = "mcpm",
-    version,
-    about = "MCP Manager: one place for every MCP server of every AI harness"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Cmd>,
-}
-
-#[derive(Subcommand)]
-enum Cmd {
-    /// Run the background daemon (no window).
-    Daemon {
-        /// Listen on this port instead of the configured one.
-        #[arg(long)]
-        port: Option<u16>,
-    },
-    /// stdio <-> HTTP bridge for stdio-only harnesses; starts the daemon if needed.
-    Bridge {
-        #[arg(long)]
-        harness: String,
-    },
-    /// Open the window (default).
-    Gui,
-    Status,
-    Harnesses,
-    Takeover {
-        harness: Option<String>,
-        #[arg(long)]
-        all: bool,
-        #[arg(long)]
-        dry_run: bool,
-    },
-    Restore {
-        harness: Option<String>,
-        #[arg(long)]
-        all: bool,
-        #[arg(long)]
-        snapshot: Option<String>,
-    },
-    Snapshots,
-    Servers {
-        #[command(subcommand)]
-        action: Option<ServersCmd>,
-    },
-    Autostart {
-        #[arg(value_parser = ["on", "off"])]
-        state: String,
-    },
-    Uninstall,
-}
-
-#[derive(Subcommand)]
-enum ServersCmd {
-    List,
-    Add,
-    Remove { id: String },
-    Enable { id: String },
-    Disable { id: String },
-}
+use cli::{Cli, Cmd};
 
 fn main() -> ExitCode {
     // Everything except the daemon and the bridge prints to the terminal that launched us.
@@ -76,7 +20,7 @@ fn main() -> ExitCode {
         attach_parent_console();
     }
     let cli = Cli::parse();
-    match run(cli.command.unwrap_or(Cmd::Gui)) {
+    match run(cli.json, cli.command.unwrap_or(Cmd::Gui)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("mcpm: {e:#}");
@@ -85,10 +29,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cmd: Cmd) -> anyhow::Result<()> {
-    let home = mcpm_daemon::storage::state_dir();
+fn run(json: bool, cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
         Cmd::Daemon { port } => {
+            let home = mcpm_daemon::storage::state_dir();
             let mut opts = mcpm_daemon::DaemonOptions::new(home);
             opts.port = port;
             opts.core = std::sync::Arc::new(mcpm_daemon::RealCoreOps::new(
@@ -100,28 +44,20 @@ fn run(cmd: Cmd) -> anyhow::Result<()> {
         Cmd::Bridge { harness } => {
             let exe: PathBuf = std::env::current_exe()?;
             mcpm_daemon::bridge::run_blocking(mcpm_daemon::bridge::BridgeOptions {
-                home,
+                home: mcpm_daemon::storage::state_dir(),
                 harness,
                 daemon_exe: Some(exe),
             })
         }
-        other => {
-            // TODO: gui, status, harnesses, takeover, restore, snapshots, servers, autostart, uninstall.
-            let name = match other {
-                Cmd::Gui => "gui",
-                Cmd::Status => "status",
-                Cmd::Harnesses => "harnesses",
-                Cmd::Takeover { .. } => "takeover",
-                Cmd::Restore { .. } => "restore",
-                Cmd::Snapshots => "snapshots",
-                Cmd::Servers { .. } => "servers",
-                Cmd::Autostart { .. } => "autostart",
-                Cmd::Uninstall => "uninstall",
-                Cmd::Daemon { .. } | Cmd::Bridge { .. } => unreachable!(),
-            };
-            println!("mcpm {name}: not yet");
-            Ok(())
-        }
+        Cmd::Gui => commands::gui(),
+        Cmd::Status => commands::status(json),
+        Cmd::Harnesses => commands::harnesses(json),
+        Cmd::Takeover { harness, all, dry_run, text } => commands::takeover(json, harness, all, dry_run, text),
+        Cmd::Restore { harness, all, snapshot, keep } => commands::restore(json, harness, all, snapshot, keep),
+        Cmd::Snapshots => commands::snapshots(json),
+        Cmd::Servers { action } => commands::servers(json, action),
+        Cmd::Autostart { state } => commands::autostart(json, state),
+        Cmd::Uninstall => commands::uninstall(json),
     }
 }
 

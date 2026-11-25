@@ -13,6 +13,7 @@ mcpm-core.workspace = true
 mcpm-daemon.workspace = true
 mcpm-gui.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "suggestions"] }
 
 [target.'cfg(windows)'.dependencies]
