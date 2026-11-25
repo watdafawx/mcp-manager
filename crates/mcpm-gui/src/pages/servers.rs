@@ -36,10 +36,10 @@ pub fn show(app: &mut App, ui: &mut Ui, pal: &Palette) {
         app.servers.selected = None; // the server vanished
     }
     if open_detail {
+        // Fixed width: a panel that grows mid-frame draws over the list.
         egui::Panel::right("server_detail")
-            .default_size(430.0)
-            .size_range(360.0..=540.0)
-            .resizable(true)
+            .exact_size(440.0)
+            .resizable(false)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -47,6 +47,8 @@ pub fn show(app: &mut App, ui: &mut Ui, pal: &Palette) {
                         egui::Frame::new()
                             .inner_margin(egui::Margin::symmetric(14, 6))
                             .show(ui, |ui| {
+                                // Content never widens the panel (it would cover the list).
+                                ui.set_max_width(ui.available_width());
                                 if app.servers.adding.is_some() {
                                     add_pane(app, ui);
                                 } else {
@@ -190,11 +192,7 @@ fn server_row(
         {
             *select = Some(cfg.id.clone());
         }
-        ui.label(
-            RichText::new(transport_summary(&cfg.transport))
-                .small()
-                .color(pal.muted),
-        );
+        let summary = transport_summary(&cfg.transport);
         theme::right(ui, |ui| {
             if theme::switch(ui, cfg.enabled)
                 .on_hover_text(if cfg.enabled { "Disable" } else { "Enable" })
@@ -217,6 +215,13 @@ fn server_row(
                 _ => row.state.label().to_string(),
             };
             ui.label(RichText::new(tools).small().color(pal.muted));
+            // Whatever room is left, left-aligned and cut short so it never runs under the buttons.
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(
+                    egui::Label::new(RichText::new(&summary).small().color(pal.muted)).truncate(),
+                )
+                .on_hover_text(&summary);
+            });
         });
     });
     ui.horizontal_wrapped(|ui| {
@@ -620,101 +625,92 @@ fn add_pane(app: &mut App, ui: &mut Ui) {
 // ---------- shared form ----------
 
 fn form_fields(ui: &mut Ui, form: &mut ServerForm, editing: bool, secrets_visible: bool) {
-    egui::Grid::new("server_form")
-        .num_columns(2)
-        .spacing([10.0, 6.0])
-        .show(ui, |ui| {
-            ui.label("ID");
-            if editing {
-                ui.label(RichText::new(&form.id).monospace());
-            } else {
-                ui.add(
-                    egui::TextEdit::singleline(&mut form.id)
-                        .hint_text("e.g. playwright")
-                        .desired_width(f32::INFINITY),
-                );
-            }
-            ui.end_row();
-
-            ui.label("Name");
-            ui.add(
-                egui::TextEdit::singleline(&mut form.name)
-                    .hint_text("shown in the list")
-                    .desired_width(f32::INFINITY),
-            );
-            ui.end_row();
-
-            ui.label("Transport");
-            if editing {
-                ui.label(match form.kind {
-                    Kind::Stdio => "stdio (child process)",
-                    Kind::Http => "Streamable HTTP",
-                });
-            } else {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut form.kind, Kind::Stdio, "stdio");
-                    ui.selectable_value(&mut form.kind, Kind::Http, "HTTP");
-                });
-            }
-            ui.end_row();
-
-            match form.kind {
-                Kind::Stdio => {
-                    ui.label("Command");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut form.command)
-                            .hint_text("npx")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.end_row();
-                    ui.label("Arguments");
-                    ui.add(
-                        egui::TextEdit::multiline(&mut form.args)
-                            .hint_text("one per line")
-                            .font(egui::TextStyle::Monospace)
-                            .desired_rows(3)
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.end_row();
-                    ui.label("Working dir");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut form.cwd)
-                            .hint_text("optional")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.end_row();
-                }
-                Kind::Http => {
-                    ui.label("URL");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut form.url)
-                            .hint_text("https://host/mcp")
-                            .desired_width(f32::INFINITY),
-                    );
-                    ui.end_row();
-                }
-            }
-
-            ui.label("Mode");
-            egui::ComboBox::from_id_salt("mode")
-                .selected_text(match form.mode {
-                    InstanceMode::Shared => "Shared · one child for everyone",
-                    InstanceMode::Session => "Session · one child per session",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut form.mode,
-                        InstanceMode::Shared,
-                        "Shared · one child for everyone",
-                    );
-                    ui.selectable_value(
-                        &mut form.mode,
-                        InstanceMode::Session,
-                        "Session · one child per session",
-                    );
-                });
-            ui.end_row();
+    // Fixed label column + fields sized to what is left. (An egui Grid with infinite-width
+    // fields grows a little every frame and pushes the side panel over the server list.)
+    ui.spacing_mut().item_spacing.y = 6.0;
+    if editing {
+        form_row(ui, "ID", |ui| {
+            ui.label(RichText::new(&form.id).monospace());
         });
+    } else {
+        form_row(ui, "ID", |ui| {
+            fill(
+                ui,
+                egui::TextEdit::singleline(&mut form.id).hint_text("e.g. playwright"),
+            );
+        });
+    }
+    form_row(ui, "Name", |ui| {
+        fill(
+            ui,
+            egui::TextEdit::singleline(&mut form.name).hint_text("shown in the list"),
+        );
+    });
+    form_row(ui, "Transport", |ui| {
+        if editing {
+            ui.label(match form.kind {
+                Kind::Stdio => "stdio (child process)",
+                Kind::Http => "Streamable HTTP",
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut form.kind, Kind::Stdio, "stdio");
+                ui.selectable_value(&mut form.kind, Kind::Http, "HTTP");
+            });
+        }
+    });
+    match form.kind {
+        Kind::Stdio => {
+            form_row(ui, "Command", |ui| {
+                fill(
+                    ui,
+                    egui::TextEdit::singleline(&mut form.command).hint_text("npx"),
+                );
+            });
+            form_row(ui, "Arguments", |ui| {
+                fill(
+                    ui,
+                    egui::TextEdit::multiline(&mut form.args)
+                        .hint_text("one per line")
+                        .font(egui::TextStyle::Monospace)
+                        .desired_rows(3),
+                );
+            });
+            form_row(ui, "Working dir", |ui| {
+                fill(
+                    ui,
+                    egui::TextEdit::singleline(&mut form.cwd).hint_text("optional"),
+                );
+            });
+        }
+        Kind::Http => {
+            form_row(ui, "URL", |ui| {
+                fill(
+                    ui,
+                    egui::TextEdit::singleline(&mut form.url).hint_text("https://host/mcp"),
+                );
+            });
+        }
+    }
+    form_row(ui, "Mode", |ui| {
+        egui::ComboBox::from_id_salt("mode")
+            .selected_text(match form.mode {
+                InstanceMode::Shared => "Shared · one child for everyone",
+                InstanceMode::Session => "Session · one child per session",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut form.mode,
+                    InstanceMode::Shared,
+                    "Shared · one child for everyone",
+                );
+                ui.selectable_value(
+                    &mut form.mode,
+                    InstanceMode::Session,
+                    "Session · one child per session",
+                );
+            });
+    });
     ui.add_space(4.0);
     match form.kind {
         Kind::Stdio => kv_table(
@@ -738,6 +734,33 @@ fn form_fields(ui: &mut Ui, form: &mut ServerForm, editing: bool, secrets_visibl
     }
 }
 
+/// One labelled form row: fixed label column, content gets the remaining width.
+fn form_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
+    const LABEL_W: f32 = 96.0;
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(LABEL_W, 22.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                // Always take the full column so every field starts at the same x.
+                ui.set_min_width(LABEL_W);
+                ui.add(egui::Label::new(label).truncate());
+            },
+        );
+        let w = ui.available_width();
+        ui.vertical(|ui| {
+            ui.set_width(w);
+            add(ui);
+        });
+    });
+}
+
+/// Adds a text field exactly as wide as the space left in the row.
+fn fill(ui: &mut Ui, edit: egui::TextEdit<'_>) {
+    let w = ui.available_width();
+    ui.add(edit.desired_width(w));
+}
+
 fn kv_table(
     ui: &mut Ui,
     title: &str,
@@ -753,21 +776,32 @@ fn kv_table(
             rows.push((String::new(), String::new()));
         }
     });
+    // Measured once: re-reading it per row lets every row creep a little wider.
+    let total = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    let button = 24.0;
+    let h = ui.spacing().interact_size.y.max(22.0);
+    let key_w = ((total - button - 2.0 * gap) * 0.4).clamp(60.0, 220.0);
+    let val_w = (total - key_w - button - 2.0 * gap).max(40.0);
     let mut remove = None;
     for (i, (k, v)) in rows.iter_mut().enumerate() {
         ui.push_id((salt, i), |ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(k)
-                        .hint_text(kh)
-                        .desired_width(130.0),
-                );
-                let w = (ui.available_width() - 30.0).max(60.0);
-                ui.add(egui::TextEdit::singleline(v).hint_text(vh).desired_width(w));
-                if ui.small_button("×").clicked() {
-                    remove = Some(i);
-                }
-            });
+            let (row, _) = ui.allocate_exact_size(egui::vec2(total, h), egui::Sense::hover());
+            let at = |x: f32, w: f32| {
+                egui::Rect::from_min_size(egui::pos2(row.left() + x, row.top()), egui::vec2(w, h))
+            };
+            ui.put(at(0.0, key_w), egui::TextEdit::singleline(k).hint_text(kh))
+                .on_hover_text(k.as_str());
+            ui.put(
+                at(key_w + gap, val_w),
+                egui::TextEdit::singleline(v).hint_text(vh),
+            );
+            if ui
+                .put(at(total - button, button), egui::Button::new("×").small())
+                .clicked()
+            {
+                remove = Some(i);
+            }
         });
     }
     if let Some(i) = remove {
