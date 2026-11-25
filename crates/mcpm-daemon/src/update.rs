@@ -202,6 +202,19 @@ pub trait Fetcher: Send + Sync {
     fn download(&self, url: &str, dest: &Path, progress: &mut dyn FnMut(u64)) -> Result<()>;
 }
 
+/// The server answered 404. For `releases/latest` that means the repository has no release yet,
+/// which is not an error.
+#[derive(Debug)]
+pub struct NotFound(pub String);
+
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "404 Not Found: {}", self.0)
+    }
+}
+
+impl std::error::Error for NotFound {}
+
 /// reqwest on the daemon's tokio runtime (`handle`); the client lives only for one call so an
 /// idle daemon holds no TLS state.
 pub struct HttpFetcher {
@@ -223,13 +236,16 @@ impl Fetcher for HttpFetcher {
     fn get_text(&self, url: &str) -> Result<String> {
         let client = self.client()?;
         self.handle.block_on(async {
-            let mut r = client
+            let r = client
                 .get(url)
                 .header("Accept", "application/vnd.github+json")
                 .send()
                 .await
-                .with_context(|| format!("GET {url}"))?
-                .error_for_status()?;
+                .with_context(|| format!("GET {url}"))?;
+            if r.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(anyhow::Error::new(NotFound(url.to_string())));
+            }
+            let mut r = r.error_for_status()?;
             let mut body = Vec::new();
             while let Some(c) = r.chunk().await? {
                 body.extend_from_slice(&c);
@@ -423,7 +439,12 @@ impl Updater {
             "{}/releases/latest",
             self.cfg.base_url.trim_end_matches('/')
         );
-        let text = self.cfg.fetcher.get_text(&url)?;
+        let text = match self.cfg.fetcher.get_text(&url) {
+            Ok(t) => t,
+            // No release published yet.
+            Err(e) if e.downcast_ref::<NotFound>().is_some() => return Ok(None),
+            Err(e) => return Err(e),
+        };
         Ok(parse_release(&text)?.filter(|r| is_newer(&r.version, &self.cfg.current)))
     }
 
@@ -554,10 +575,16 @@ pub fn swap_in(exe: &Path, staged: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Removes what an earlier update left beside `exe` and old downloads. Best effort.
-pub fn clean_up(exe: &Path, state_dir: &Path) {
+/// Removes `mcpm.exe.old` and `mcpm.exe.new` beside `exe`. Best effort: the old file stays while
+/// a window of the old version still runs from it.
+pub fn clean_beside(exe: &Path) {
     let _ = std::fs::remove_file(beside(exe, ".old"));
     let _ = std::fs::remove_file(beside(exe, ".new"));
+}
+
+/// Removes what an earlier update left beside `exe` and old downloads. Best effort.
+pub fn clean_up(exe: &Path, state_dir: &Path) {
+    clean_beside(exe);
     if let Ok(rd) = std::fs::read_dir(state_dir.join("updates")) {
         for e in rd.flatten() {
             let _ = std::fs::remove_file(e.path());
@@ -731,6 +758,8 @@ impl Service {
         clean_up(self.updater.exe(), &self.updater.cfg.state_dir);
         tokio::time::sleep(self.cfg.first_check_delay).await;
         loop {
+            // An open window of the old version can keep `mcpm.exe.old` alive for a while.
+            clean_beside(self.updater.exe());
             self.check().await;
             if self.updater.available_version().is_some() {
                 self.install_when_idle().await;
@@ -1089,6 +1118,30 @@ mod tests {
         publish(&e, "0.2.0", b"MZnew", Some(sha_of(b"MZnew")));
         e.up.check().unwrap();
         assert!(e.up.state(true).last_error.is_none());
+    }
+
+    #[test]
+    fn a_repository_without_releases_is_not_an_error() {
+        struct NoReleases;
+        impl Fetcher for NoReleases {
+            fn get_text(&self, url: &str) -> Result<String> {
+                Err(anyhow::Error::new(NotFound(url.to_string())))
+            }
+            fn download(&self, _: &str, _: &Path, _: &mut dyn FnMut(u64)) -> Result<()> {
+                unreachable!()
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let up = Updater::new(UpdaterCfg {
+            exe: dir.path().join("mcpm.exe"),
+            state_dir: dir.path().join("state"),
+            current: "0.1.0".into(),
+            base_url: "https://api".into(),
+            fetcher: Arc::new(NoReleases),
+        });
+        assert!(up.check().unwrap().is_none());
+        let s = up.state(true);
+        assert!(!s.available && s.last_error.is_none() && s.last_check.is_some());
     }
 
     #[test]

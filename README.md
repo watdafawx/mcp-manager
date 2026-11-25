@@ -47,6 +47,8 @@ window. The right-click menu has:
 
 `mcpm daemon --no-tray` runs without the icon.
 
+![Tray menu with an update waiting](docs/screenshots/tray-update-menu.png)
+
 ## Updates
 
 The daemon asks GitHub for the latest release 20 seconds after it starts and every 6 hours. A
@@ -56,6 +58,10 @@ tool call is running. The daemon restarts itself, and an open window offers **Re
 - **Settings** in the window, or `mcpm update --check`, shows what is available.
 - Turn **Install updates automatically** off to be asked first (tray, window, `mcpm update`).
 - `mcpm update` installs by hand.
+
+![Settings, Updates card](docs/screenshots/settings-updates.png)
+
+![Window banner after the daemon updated](docs/screenshots/update-banner.png)
 
 ## Building from source
 
