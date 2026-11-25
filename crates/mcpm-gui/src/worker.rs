@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 
 use crate::autostart;
 use crate::client::{self, ApiError, Conn};
-use crate::model::{CallRow, HarnessRow, HarnessState, Plan, ServerRow, SnapRow, Status, ToolInfo};
+use crate::model::{
+    CallRow, HarnessRow, HarnessState, Plan, ServerRow, SnapRow, Status, ToolInfo, UpdateInfo,
+};
 use crate::state::{Level, Msg, Page, PlanView};
 
 pub const POLL_EVERY: Duration = Duration::from_secs(2);
@@ -77,7 +79,12 @@ pub enum Job {
     SetPort(u16),
     SetAutostart(bool),
     StopDaemon,
+    /// Stop the daemon and start it again from the exe on disk.
+    RestartDaemon,
     Uninstall,
+    CheckUpdate,
+    InstallUpdate,
+    SetAutoUpdate(bool),
 }
 
 pub type Repaint = Arc<dyn Fn() + Send + Sync>;
@@ -107,6 +114,8 @@ struct Runner {
     conn: Option<Conn>,
     harnesses: Vec<HarnessRow>,
     tick: u64,
+    /// Daemon version seen last (an install is done when it changes).
+    version: String,
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: Value, what: &str) -> Result<T, ApiError> {
@@ -120,6 +129,7 @@ impl Runner {
             conn: None,
             harnesses: Vec::new(),
             tick: 0,
+            version: String::new(),
         }
     }
 
@@ -199,8 +209,25 @@ impl Runner {
 
     fn refresh_status(&mut self) -> Result<(), ApiError> {
         let s: Status = parse(self.call(|c| c.get("/api/status"))?, "status")?;
+        self.version = s.version.clone();
         self.send(Msg::Status(s));
         Ok(())
+    }
+
+    fn refresh_update(&mut self) -> Result<(), ApiError> {
+        match self.call(|c| c.get("/api/update")) {
+            Ok(v) => {
+                let u: UpdateInfo = parse(v, "update")?;
+                self.send(Msg::Update(Some(u)));
+                Ok(())
+            }
+            // 501: this daemon was started with updates off.
+            Err(e) if e.status == Some(501) => {
+                self.send(Msg::Update(None));
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn refresh_servers(&mut self) -> Result<(), ApiError> {
@@ -234,7 +261,8 @@ impl Runner {
             .and_then(|_| self.refresh_servers())
             .and_then(|_| self.refresh_harnesses())
             .and_then(|_| self.refresh_snapshots())
-            .and_then(|_| self.refresh_calls());
+            .and_then(|_| self.refresh_calls())
+            .and_then(|_| self.refresh_update());
         self.report(r);
     }
 
@@ -267,6 +295,9 @@ impl Runner {
                 && (slow || self.harnesses.is_empty())
             {
                 r = self.refresh_harnesses();
+            }
+            if r.is_ok() && ctx.page == Page::Settings {
+                r = self.refresh_update();
             }
             if r.is_ok() && ctx.page == Page::Snapshots && slow {
                 r = self.refresh_snapshots();
@@ -410,8 +441,76 @@ impl Runner {
                 self.send(Msg::Offline("the daemon was stopped".into()));
                 (r.map(|_| Some("Daemon stopped".to_string())), false)
             }
+            Job::RestartDaemon => {
+                let r = self.call(|c| c.post("/api/shutdown", &json!({})));
+                self.wait_gone();
+                self.conn = None;
+                self.start();
+                (r.map(|_| Some("Daemon restarted".to_string())), false)
+            }
             Job::Uninstall => (self.uninstall(), false),
+            Job::CheckUpdate => (self.check_update(), false),
+            Job::InstallUpdate => (self.install_update(), true),
+            Job::SetAutoUpdate(on) => {
+                let r = self.call(|c| c.put("/api/update", &json!({ "autoUpdate": on })));
+                let text = format!("Automatic updates {}", if on { "on" } else { "off" });
+                (r.map(|_| Some(text)), true)
+            }
         }
+    }
+
+    fn check_update(&mut self) -> Result<Option<String>, ApiError> {
+        let v = self.call(|c| c.slow().post("/api/update/check", &json!({})))?;
+        let u: UpdateInfo = parse(v, "update")?;
+        self.send(Msg::Update(Some(u.clone())));
+        match (u.available, u.latest, u.last_error) {
+            (true, Some(v), _) => Ok(Some(format!("Update {v} is available"))),
+            (false, _, Some(e)) => Err(ApiError::net(format!("update check failed: {e}"))),
+            _ => Ok(Some("Up to date".to_string())),
+        }
+    }
+
+    /// Asks the daemon to install; it swaps the exe and starts its successor, so wait for a
+    /// daemon with another version to answer.
+    fn install_update(&mut self) -> Result<Option<String>, ApiError> {
+        let from = self.version.clone();
+        let v = self.call(|c| c.post("/api/update/install", &json!({})))?;
+        let to = v
+            .get("installing")
+            .and_then(Value::as_str)
+            .unwrap_or("the update")
+            .to_string();
+        self.conn = None;
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(180) {
+            std::thread::sleep(Duration::from_millis(500));
+            let Some(c) = client::locate(&self.cfg.home) else {
+                continue; // the old daemon is gone and the new one is not up yet
+            };
+            if let Ok(st) = c.get("/api/status")
+                && st
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .is_some_and(|x| x != from)
+            {
+                self.conn = Some(c);
+                return Ok(Some(format!("Updated to {to}")));
+            }
+            // Still the old daemon: report a failed install once it has had time to start.
+            if started.elapsed() > Duration::from_secs(6)
+                && let Ok(u) = c
+                    .get("/api/update")
+                    .and_then(|v| parse::<UpdateInfo>(v, "update"))
+                && u.phase == "idle"
+                && let Some(e) = u.last_error
+            {
+                self.conn = Some(c);
+                return Err(ApiError::net(format!("update failed: {e}")));
+            }
+        }
+        Err(ApiError::net(
+            "the new daemon did not come up within 3 minutes (see daemon.log in the state folder)",
+        ))
     }
 
     fn plan(&mut self, target: &str) -> Result<Option<String>, ApiError> {

@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mcpm_core::model::{InstanceMode, ServerConfig, Transport};
-use mcpm_daemon::{DaemonOptions, RunningDaemon, Started};
+use mcpm_daemon::update::{Fetcher, ServiceCfg};
+use mcpm_daemon::{DaemonOptions, RunningDaemon, Started, UpdateOptions};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -1029,5 +1030,110 @@ async fn stdio_bridge_forwards_requests_and_notifications() {
         .expect("bridge exits")
         .unwrap()
         .unwrap();
+    rig.stop().await;
+}
+
+/// Answers every release request with one canned reply.
+struct CannedRelease(String);
+
+impl Fetcher for CannedRelease {
+    fn get_text(&self, _url: &str) -> anyhow::Result<String> {
+        Ok(self.0.clone())
+    }
+    fn download(
+        &self,
+        _url: &str,
+        _dest: &std::path::Path,
+        _progress: &mut dyn FnMut(u64),
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("downloads are not part of this test")
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn update_api_is_off_by_default_and_reports_a_found_release_when_on() {
+    // Off: the endpoints say so, status carries the setting.
+    let off = Rig::start().await;
+    assert_eq!(off.api("GET", "/api/update", None).await.0, 501);
+    assert_eq!(off.api("POST", "/api/update/check", None).await.0, 501);
+    let (_, status) = off.api("GET", "/api/status", None).await;
+    assert_eq!(
+        status["autoUpdate"], true,
+        "automatic updates default to on"
+    );
+    assert_eq!(status["updateAvailable"], Value::Null);
+    off.stop().await;
+
+    // On, but the latest release is older than this build: nothing to install.
+    let old = r#"{"tag_name":"v0.0.1","draft":false,"prerelease":false,
+        "assets":[{"name":"mcpm.exe","browser_download_url":"https://h/exe","size":5}]}"#;
+    let rig = Rig::start_with(|o| {
+        o.update = UpdateOptions {
+            enabled: true,
+            exe: std::env::temp_dir().join("mcpm-never-replaced.exe"),
+            fetcher: Some(std::sync::Arc::new(CannedRelease(old.into()))),
+            base_url: Some("https://example.invalid/repo".into()),
+            service: ServiceCfg {
+                first_check_delay: Duration::from_secs(3600),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+    })
+    .await;
+    assert_eq!(rig.api("POST", "/api/update/install", None).await.0, 409);
+    let (_, u) = rig.api("GET", "/api/update", None).await;
+    assert_eq!(u["available"], false);
+    rig.stop().await;
+
+    // On, with a canned newer release. The background loop is parked so only the API acts.
+    let release = r#"{"tag_name":"v999.0.0","draft":false,"prerelease":false,"body":"big news",
+        "assets":[{"name":"mcpm.exe","browser_download_url":"https://h/exe","size":5},
+                  {"name":"mcpm.exe.sha256","browser_download_url":"https://h/sha","size":70}]}"#;
+    let rig = Rig::start_with(|o| {
+        o.update = UpdateOptions {
+            enabled: true,
+            exe: std::env::temp_dir().join("mcpm-never-replaced.exe"),
+            fetcher: Some(std::sync::Arc::new(CannedRelease(release.into()))),
+            base_url: Some("https://example.invalid/repo".into()),
+            service: ServiceCfg {
+                first_check_delay: Duration::from_secs(3600),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+    })
+    .await;
+
+    let (st, u) = rig.api("GET", "/api/update", None).await;
+    assert_eq!(st, 200, "{u}");
+    assert_eq!(u["available"], false);
+    assert_eq!(u["current"], mcpm_daemon::VERSION);
+    assert_eq!(u["autoUpdate"], true);
+
+    let (st, u) = rig.api("POST", "/api/update/check", None).await;
+    assert_eq!(st, 200, "{u}");
+    assert_eq!(u["available"], true);
+    assert_eq!(u["latest"], "999.0.0");
+    assert_eq!(u["notes"], "big news");
+    assert_eq!(u["lastError"], Value::Null);
+    let (_, status) = rig.api("GET", "/api/status", None).await;
+    assert_eq!(status["updateAvailable"], "999.0.0");
+
+    // The setting is saved and shows up everywhere.
+    let (st, _) = rig
+        .api("PUT", "/api/update", Some(json!({ "autoUpdate": false })))
+        .await;
+    assert_eq!(st, 200);
+    let (_, u) = rig.api("GET", "/api/update", None).await;
+    assert_eq!(u["autoUpdate"], false);
+    assert_eq!(
+        rig.api("PUT", "/api/update", Some(json!({ "autoUpdate": "yes" })))
+            .await
+            .0,
+        400
+    );
+    let saved = mcpm_core::store::load(&rig.home).unwrap();
+    assert!(!saved.auto_update);
     rig.stop().await;
 }

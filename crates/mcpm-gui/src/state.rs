@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use mcpm_core::model::ServerConfig;
 
-use crate::model::{CallRow, HarnessRow, Plan, ServerRow, SnapRow, Status, ToolInfo};
+use crate::model::{
+    CallRow, HarnessRow, Plan, ServerRow, SnapRow, Status, ToolInfo, UpdateInfo, compare_versions,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Page {
@@ -75,6 +77,17 @@ pub struct PlanView {
     pub errors: Vec<(String, String)>,
 }
 
+/// The notice strip above the pages about versions and updates.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Banner {
+    /// The daemon runs a newer build than this window (an update was installed).
+    DaemonNewer { daemon: String },
+    /// The daemon runs an older build than this window.
+    DaemonOlder { daemon: String },
+    /// A newer release exists.
+    UpdateAvailable { version: String, auto: bool },
+}
+
 /// What the worker thread tells the window.
 #[derive(Debug, Clone)]
 pub enum Msg {
@@ -98,6 +111,8 @@ pub enum Msg {
     Busy(i32),
     /// Registry autostart value (`None` = off).
     Autostart(Option<String>),
+    /// `GET /api/update`; `None` = this daemon has updates switched off.
+    Update(Option<UpdateInfo>),
     /// Uninstall finished: the window should close.
     Quit,
 }
@@ -117,6 +132,7 @@ pub struct AppData {
     pub toasts: Vec<Toast>,
     pub busy: i32,
     pub autostart: Option<String>,
+    pub update: Option<UpdateInfo>,
     pub quit: bool,
     /// Bumped on every applied message that changes server data (UI uses it to resync forms).
     pub servers_rev: u64,
@@ -162,6 +178,7 @@ impl AppData {
             Msg::Toast(level, text) => self.toast(level, text),
             Msg::Busy(d) => self.busy = (self.busy + d).max(0),
             Msg::Autostart(a) => self.autostart = a,
+            Msg::Update(u) => self.update = u,
             Msg::Quit => self.quit = true,
         }
     }
@@ -195,6 +212,29 @@ impl AppData {
     pub fn prune_toasts(&mut self, now: Instant) {
         self.toasts
             .retain(|t| t.level == Level::Error || now.duration_since(t.at) < INFO_TTL);
+    }
+
+    /// What to tell the user about versions; `window` is this build's version.
+    pub fn banner(&self, window: &str) -> Option<Banner> {
+        let s = self
+            .status
+            .as_ref()
+            .filter(|_| self.conn == ConnState::Online)?;
+        match compare_versions(window, &s.version) {
+            Some(std::cmp::Ordering::Greater) => Some(Banner::DaemonNewer {
+                daemon: s.version.clone(),
+            }),
+            Some(std::cmp::Ordering::Less) => Some(Banner::DaemonOlder {
+                daemon: s.version.clone(),
+            }),
+            _ => s
+                .update_available
+                .clone()
+                .map(|version| Banner::UpdateAvailable {
+                    version,
+                    auto: s.auto_update,
+                }),
+        }
     }
 
     pub fn server(&self, id: &str) -> Option<&ServerRow> {
@@ -318,6 +358,61 @@ mod tests {
         let id = d.toasts[0].id;
         d.dismiss_toast(id);
         assert!(d.toasts.is_empty());
+    }
+
+    fn online(version: &str, update: Option<&str>) -> AppData {
+        let mut d = AppData::default();
+        d.apply(Msg::Status(Status {
+            version: version.into(),
+            update_available: update.map(String::from),
+            auto_update: true,
+            ..Default::default()
+        }));
+        d
+    }
+
+    #[test]
+    fn banner_by_version() {
+        assert_eq!(AppData::default().banner("0.2.0"), None, "offline: none");
+        assert_eq!(online("0.2.0", None).banner("0.2.0"), None);
+        assert_eq!(
+            online("0.3.0", None).banner("0.2.0"),
+            Some(Banner::DaemonNewer {
+                daemon: "0.3.0".into()
+            })
+        );
+        assert_eq!(
+            online("0.1.0", None).banner("0.2.0"),
+            Some(Banner::DaemonOlder {
+                daemon: "0.1.0".into()
+            })
+        );
+        assert_eq!(
+            online("0.2.0", Some("0.3.0")).banner("0.2.0"),
+            Some(Banner::UpdateAvailable {
+                version: "0.3.0".into(),
+                auto: true
+            })
+        );
+        // A version mismatch outranks "update available".
+        assert!(matches!(
+            online("0.3.0", Some("0.4.0")).banner("0.2.0"),
+            Some(Banner::DaemonNewer { .. })
+        ));
+        // An unparsable daemon version never nags.
+        assert_eq!(online("dev", None).banner("0.2.0"), None);
+    }
+
+    #[test]
+    fn update_info_is_kept_and_cleared() {
+        let mut d = AppData::default();
+        d.apply(Msg::Update(Some(UpdateInfo {
+            current: "0.2.0".into(),
+            ..Default::default()
+        })));
+        assert_eq!(d.update.as_ref().unwrap().current, "0.2.0");
+        d.apply(Msg::Update(None));
+        assert!(d.update.is_none());
     }
 
     #[test]

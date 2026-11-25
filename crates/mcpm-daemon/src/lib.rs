@@ -22,10 +22,14 @@ pub mod rpc;
 pub mod server;
 pub mod storage;
 pub mod timeutil;
+pub mod tray;
+pub mod update;
 
 pub use core_impl::RealCoreOps;
 pub use coreops::{CoreOps, OpError, StubCoreOps};
-pub use daemon::{DaemonOptions, RunningDaemon, Started, run_blocking};
+pub use daemon::{
+    AutostartCtl, DaemonOptions, RunningDaemon, Started, TrayOptions, UpdateOptions, run_blocking,
+};
 pub use pool::{Pool, PoolOptions};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

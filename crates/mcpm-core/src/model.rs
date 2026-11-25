@@ -16,13 +16,22 @@ pub struct ManagerConfig {
     pub port: u16,
     #[serde(default)]
     pub autostart: bool,
+    /// Download and install new releases by itself (when no tool call is running).
+    #[serde(default = "yes")]
+    pub auto_update: bool,
     #[serde(default)]
     pub servers: Vec<ServerConfig>,
 }
 
 impl Default for ManagerConfig {
     fn default() -> Self {
-        Self { version: 1, port: DEFAULT_PORT, autostart: true, servers: Vec::new() }
+        Self {
+            version: 1,
+            port: DEFAULT_PORT,
+            autostart: true,
+            auto_update: true,
+            servers: Vec::new(),
+        }
     }
 }
 
@@ -117,12 +126,31 @@ pub fn valid_server_id(id: &str) -> bool {
     !b.is_empty()
         && b.len() <= 48
         && b[0].is_ascii_alphanumeric()
-        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
+        && b.iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_update_defaults_on_and_round_trips() {
+        // A config written before the setting existed keeps updating.
+        let old: ManagerConfig = serde_json::from_str(r#"{"version":1,"port":40000}"#).unwrap();
+        assert!(old.auto_update);
+        let c = ManagerConfig {
+            auto_update: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains(r#""autoUpdate":false"#));
+        assert!(
+            !serde_json::from_str::<ManagerConfig>(&json)
+                .unwrap()
+                .auto_update
+        );
+    }
 
     #[test]
     fn ids() {
@@ -138,7 +166,10 @@ mod tests {
         let mut s = ServerConfig {
             id: "x".into(),
             name: "x".into(),
-            transport: Transport::Http { url: "http://h".into(), headers: Default::default() },
+            transport: Transport::Http {
+                url: "http://h".into(),
+                headers: Default::default(),
+            },
             enabled: true,
             mode: InstanceMode::Shared,
             pinned_tools: vec![],

@@ -32,6 +32,10 @@ impl Core {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join("AppData").join("Roaming"));
         let state_dir = paths::state_dir(&home, &appdata);
-        Self { home, appdata, state_dir }
+        Self {
+            home,
+            appdata,
+            state_dir,
+        }
     }
 }

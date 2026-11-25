@@ -28,6 +28,12 @@ pub enum Cmd {
         /// Listen on this port instead of the configured one.
         #[arg(long)]
         port: Option<u16>,
+        /// No notification-area icon (tests, headless sessions).
+        #[arg(long)]
+        no_tray: bool,
+        /// Wait for this process to exit first (an update starts the new daemon this way).
+        #[arg(long, hide = true)]
+        wait_pid: Option<u32>,
     },
     /// stdio <-> HTTP bridge for stdio-only harnesses; starts the daemon if needed.
     Bridge {
@@ -82,6 +88,12 @@ pub enum Cmd {
     },
     /// Restore every harness, turn autostart off and stop the daemon.
     Uninstall,
+    /// Look for a newer release and install it.
+    Update {
+        /// Only look; install nothing.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
@@ -234,6 +246,37 @@ mod tests {
     #[test]
     fn no_args_means_gui() {
         assert!(parse(&[]).unwrap().command.is_none());
+    }
+
+    #[test]
+    fn daemon_flags() {
+        let Some(Cmd::Daemon {
+            port,
+            no_tray,
+            wait_pid,
+        }) = parse(&["daemon", "--no-tray", "--port", "40000", "--wait-pid", "7"])
+            .unwrap()
+            .command
+        else {
+            panic!()
+        };
+        assert_eq!((port, no_tray, wait_pid), (Some(40000), true, Some(7)));
+        let Some(Cmd::Daemon { no_tray, .. }) = parse(&["daemon"]).unwrap().command else {
+            panic!()
+        };
+        assert!(!no_tray, "the tray is on by default");
+    }
+
+    #[test]
+    fn update_flags() {
+        let Some(Cmd::Update { check }) = parse(&["update", "--check"]).unwrap().command else {
+            panic!()
+        };
+        assert!(check);
+        let Some(Cmd::Update { check }) = parse(&["update"]).unwrap().command else {
+            panic!()
+        };
+        assert!(!check);
     }
 
     #[test]

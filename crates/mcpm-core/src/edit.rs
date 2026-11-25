@@ -252,11 +252,17 @@ fn insert_member(
         let indent = own_line.unwrap_or_default();
         let comma = if last.comma.is_none() { "," } else { "" };
         let at = last.comma.map_or(last.end, |c| c + 1);
-        out.insert_str(at, &format!("{comma}{sep}{indent}{key}: {}", pretty(v, &indent)?));
+        out.insert_str(
+            at,
+            &format!("{comma}{sep}{indent}{key}: {}", pretty(v, &indent)?),
+        );
     } else {
         let outer = line_indent(out, open).unwrap_or_else(|| {
             let ls = out[..open].rfind('\n').map_or(0, |n| n + 1);
-            out[ls..].chars().take_while(|c| *c == ' ' || *c == '\t').collect()
+            out[ls..]
+                .chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect()
         });
         let indent = format!("{outer}  ");
         let member = format!("\n{indent}{key}: {}\n{outer}", pretty(v, &indent)?);
@@ -317,7 +323,13 @@ mod tests {
         );
         let gone = set(&set(&added, &f, "b", None).unwrap(), &f, "mcpm", None).unwrap();
         assert_eq!(entries(&gone, &f).unwrap().len(), 0);
-        let fresh = set("{\n  \"mcp\": {}\n}\n", &f, "mcpm", Some(&json!({"url": "u"}))).unwrap();
+        let fresh = set(
+            "{\n  \"mcp\": {}\n}\n",
+            &f,
+            "mcpm",
+            Some(&json!({"url": "u"})),
+        )
+        .unwrap();
         assert_eq!(
             fresh,
             "{\n  \"mcp\": {\n    \"mcpm\": {\n      \"url\": \"u\"\n    }\n  }\n}\n"

@@ -8,7 +8,9 @@
 //! GET    /api/servers/{id}/tools
 //! GET    /api/calls[?limit=N]
 //! POST   /api/shutdown
-//! GET    /api/harnesses                  (CoreOps)
+//! GET    /api/update                     (state)  PUT /api/update {autoUpdate}
+//! POST   /api/update/check | install
+//! GET    /api/harnesses                 (CoreOps)
 //! POST   /api/takeover/plan  {harness}   (CoreOps)
 //! POST   /api/takeover/apply {harness|"all"}
 //! GET    /api/snapshots   DELETE /api/snapshots/{id}
@@ -146,6 +148,56 @@ pub async fn handle(st: Arc<AppState>, req: Request<Incoming>) -> Response<Body>
                 st2.shutdown_requested.notify_one();
             });
             ok(json!({ "ok": true }))
+        }
+
+        // ---- self-update ----
+        (&Method::GET, ["api", "update"]) => match &st.update {
+            Some(u) => ok(serde_json::to_value(u.state()).unwrap_or_default()),
+            None => err(
+                StatusCode::NOT_IMPLEMENTED,
+                "updates are off in this daemon",
+            ),
+        },
+        (&Method::POST, ["api", "update", "check"]) => match st.update.clone() {
+            Some(u) => ok(serde_json::to_value(u.check().await).unwrap_or_default()),
+            None => err(
+                StatusCode::NOT_IMPLEMENTED,
+                "updates are off in this daemon",
+            ),
+        },
+        (&Method::POST, ["api", "update", "install"]) => {
+            let Some(u) = st.update.clone() else {
+                return err(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "updates are off in this daemon",
+                );
+            };
+            let mut state = u.state();
+            if !state.available {
+                state = u.check().await;
+            }
+            let Some(version) = state.latest.clone().filter(|_| state.available) else {
+                return err(StatusCode::CONFLICT, "no update is available");
+            };
+            // Download and swap take a while and end with this process: answer first.
+            tokio::spawn(async move {
+                let _ = u.install().await;
+            });
+            ok(json!({ "ok": true, "installing": version }))
+        }
+        (&Method::PUT, ["api", "update"]) => {
+            let body = match read_json(req).await {
+                Ok(b) => b,
+                Err(r) => return r,
+            };
+            let Some(on) = body.get("autoUpdate").and_then(Value::as_bool) else {
+                return err(StatusCode::BAD_REQUEST, "body needs `autoUpdate: bool`");
+            };
+            st.pool.set_auto_update(on);
+            match &st.update {
+                Some(u) => ok(serde_json::to_value(u.state()).unwrap_or_default()),
+                None => ok(json!({ "autoUpdate": on })),
+            }
         }
 
         (&Method::GET, ["api", "servers"]) => ok(Value::Array(st.pool.list_servers(None))),
@@ -325,6 +377,8 @@ fn status(st: &AppState) -> Value {
         "runningInstances": st.pool.running_instances(),
         "sessions": st.sessions.lock().unwrap().len(),
         "home": st.home.display().to_string(),
+        "autoUpdate": cfg.auto_update,
+        "updateAvailable": st.update.as_ref().and_then(|u| u.updater.available_version()),
     })
 }
 

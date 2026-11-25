@@ -1,7 +1,31 @@
 //! Human-readable output for the CLI. Everything here returns a `String` so it is unit-testable.
 
 use mcpm_core::model::Transport;
-use mcpm_gui::model::{HarnessRow, Plan, ServerRow, SnapRow, Status, format_time, format_uptime};
+use mcpm_gui::model::{
+    HarnessRow, Plan, ServerRow, SnapRow, Status, UpdateInfo, format_time, format_uptime,
+};
+
+/// `mcpm update --check`.
+pub fn update(u: &UpdateInfo) -> String {
+    let mut s = format!("mcpm {}", u.current);
+    match (&u.latest, u.available) {
+        (Some(v), true) => s.push_str(&format!(
+            "\nupdate {v} is available (mcpm update installs it)"
+        )),
+        _ => s.push_str("\nup to date"),
+    }
+    if let Some(t) = &u.last_check {
+        s.push_str(&format!("\nchecked {t}"));
+    }
+    if let Some(e) = &u.last_error {
+        s.push_str(&format!("\nlast error: {e}"));
+    }
+    s.push_str(&format!(
+        "\nautomatic updates: {}",
+        if u.auto_update { "on" } else { "off" }
+    ));
+    s
+}
 
 /// Left-aligned table; the last column is not padded.
 pub fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
@@ -173,6 +197,29 @@ pub fn status_offline(
         "daemon:    not running\nport:      {port} (configured)\nservers:   {servers} (in config.json)\nstate dir: {state_dir}\nautostart: {}",
         autostart.unwrap_or("off")
     )
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+
+    #[test]
+    fn update_text() {
+        let mut u = UpdateInfo {
+            current: "0.1.0".into(),
+            auto_update: true,
+            ..Default::default()
+        };
+        assert_eq!(update(&u), "mcpm 0.1.0\nup to date\nautomatic updates: on");
+        u.latest = Some("0.2.0".into());
+        u.available = true;
+        u.last_error = Some("offline".into());
+        u.auto_update = false;
+        let t = update(&u);
+        assert!(t.contains("update 0.2.0 is available"));
+        assert!(t.contains("last error: offline"));
+        assert!(t.ends_with("automatic updates: off"));
+    }
 }
 
 #[cfg(test)]

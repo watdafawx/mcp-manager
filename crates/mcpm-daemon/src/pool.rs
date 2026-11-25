@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -144,9 +145,27 @@ struct Inner {
     cfg: RwLock<ManagerConfig>,
     instances: Mutex<HashMap<String, Arc<Instance>>>,
     calls: Mutex<VecDeque<CallEntry>>,
+    /// Tool calls being served right now (the updater waits for zero).
+    in_flight: AtomicUsize,
     events: broadcast::Sender<()>,
     opts: PoolOptions,
     log: Arc<Logger>,
+}
+
+/// Counts a running tool call for as long as it lives.
+struct InFlight<'a>(&'a AtomicUsize);
+
+impl<'a> InFlight<'a> {
+    fn enter(n: &'a AtomicUsize) -> Self {
+        n.fetch_add(1, Ordering::Relaxed);
+        Self(n)
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 #[derive(Clone)]
@@ -232,6 +251,7 @@ impl Pool {
                 cfg: RwLock::new(cfg),
                 instances: Mutex::new(HashMap::new()),
                 calls: Mutex::new(VecDeque::new()),
+                in_flight: AtomicUsize::new(0),
                 events,
                 opts,
                 log,
@@ -251,6 +271,17 @@ impl Pool {
 
     pub fn config(&self) -> ManagerConfig {
         self.inner.cfg.read().unwrap().clone()
+    }
+
+    /// Tool calls being served right now.
+    pub fn in_flight_calls(&self) -> usize {
+        self.inner.in_flight.load(Ordering::Relaxed)
+    }
+
+    /// Switches automatic updates on or off and saves it.
+    pub fn set_auto_update(&self, on: bool) {
+        self.inner.cfg.write().unwrap().auto_update = on;
+        self.save();
     }
 
     pub fn server(&self, id: &str) -> Option<ServerConfig> {
@@ -828,6 +859,7 @@ impl Pool {
     ) -> Result<Value> {
         let started = Instant::now();
         let ts = timeutil::now_ms();
+        let _busy = InFlight::enter(&self.inner.in_flight);
         let res = async {
             let (inst, client) = self.ensure(server_id, session, harness).await?;
             let r = client
@@ -867,6 +899,35 @@ impl Pool {
             .take(limit)
             .cloned()
             .collect()
+    }
+
+    /// Restarts every server that has a running instance (Shared ones start again at once,
+    /// Session ones on their next call). Returns how many were restarted.
+    pub async fn restart_all(&self) -> usize {
+        let ids: Vec<String> = {
+            let m = self.inner.instances.lock().unwrap();
+            self.config()
+                .servers
+                .iter()
+                .filter(|s| {
+                    m.iter().any(|(k, i)| {
+                        belongs_to(k, &s.id) && i.state.lock().unwrap().client.is_some()
+                    })
+                })
+                .map(|s| s.id.clone())
+                .collect()
+        };
+        let mut n = 0;
+        for id in ids {
+            match self.restart_server(&id, None, None).await {
+                Ok(_) => n += 1,
+                Err(e) => self
+                    .inner
+                    .log
+                    .warn(&format!("restart of {id} failed: {e:#}")),
+            }
+        }
+        n
     }
 
     /// Kills every instance of the server and starts one again for the caller's session.

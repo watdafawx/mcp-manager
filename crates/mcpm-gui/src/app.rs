@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Align2, Color32, RichText, Ui};
 
+use crate::model::WINDOW_VERSION;
 use crate::model::format_uptime;
 use crate::pages::{harnesses, servers, settings, snapshots};
-use crate::state::{AppData, ConnState, Level, Msg, Page};
+use crate::state::{AppData, Banner, ConnState, Level, Msg, Page};
 use crate::theme::{self, Palette};
 use crate::worker::{self, Job, Shared, WorkerCfg};
 
@@ -131,6 +132,7 @@ impl eframe::App for App {
             if let ConnState::Offline(msg) = self.data.conn.clone() {
                 self.offline_banner(ui, &pal, &msg);
             }
+            self.version_banner(ui, &pal);
             match self.page {
                 Page::Servers => servers::show(self, ui, &pal),
                 Page::Harnesses => harnesses::show(self, ui, &pal),
@@ -198,6 +200,69 @@ impl App {
                 });
             });
         ui.add_space(6.0);
+    }
+
+    fn version_banner(&mut self, ui: &mut Ui, pal: &Palette) {
+        let Some(banner) = self.data.banner(WINDOW_VERSION) else {
+            return;
+        };
+        let mut job = None;
+        let mut relaunch = false;
+        egui::Frame::group(ui.style())
+            .stroke(egui::Stroke::new(1.0, pal.warn))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| match &banner {
+                    Banner::DaemonNewer { daemon } => {
+                        ui.label(
+                            RichText::new(format!("Updated to {daemon}."))
+                                .strong()
+                                .color(pal.ok),
+                        );
+                        ui.label(
+                            RichText::new(format!("This window is still {WINDOW_VERSION}."))
+                                .small()
+                                .color(pal.muted),
+                        );
+                        relaunch = ui.button("Restart window").clicked();
+                    }
+                    Banner::DaemonOlder { daemon } => {
+                        ui.label(
+                            RichText::new(format!(
+                                "The daemon is {daemon}, this window is {WINDOW_VERSION}."
+                            ))
+                            .color(pal.warn),
+                        );
+                        if ui.button("Restart daemon").clicked() {
+                            job = Some(Job::RestartDaemon);
+                        }
+                    }
+                    Banner::UpdateAvailable { version, auto } => {
+                        ui.label(
+                            RichText::new(format!("Update {version} is available."))
+                                .strong()
+                                .color(pal.warn),
+                        );
+                        if *auto {
+                            ui.label(
+                                RichText::new("Installs by itself when no tool call is running.")
+                                    .small()
+                                    .color(pal.muted),
+                            );
+                        }
+                        if ui.button("Install now").clicked() {
+                            job = Some(Job::InstallUpdate);
+                        }
+                    }
+                });
+            });
+        ui.add_space(6.0);
+        if let Some(j) = job {
+            self.send(j);
+        }
+        if relaunch {
+            crate::RELAUNCH.store(true, std::sync::atomic::Ordering::SeqCst);
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 
     fn show_toasts(&mut self, ctx: &egui::Context, pal: &Palette) {

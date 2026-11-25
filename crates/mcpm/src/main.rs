@@ -31,16 +31,11 @@ fn main() -> ExitCode {
 
 fn run(json: bool, cmd: Cmd) -> anyhow::Result<()> {
     match cmd {
-        Cmd::Daemon { port } => {
-            let home = mcpm_daemon::storage::state_dir();
-            let mut opts = mcpm_daemon::DaemonOptions::new(home);
-            opts.port = port;
-            opts.core = std::sync::Arc::new(mcpm_daemon::RealCoreOps::new(
-                mcpm_daemon::storage::core_context(),
-                std::env::current_exe()?,
-            ));
-            mcpm_daemon::run_blocking(opts)
-        }
+        Cmd::Daemon {
+            port,
+            no_tray,
+            wait_pid,
+        } => commands::daemon(port, no_tray, wait_pid),
         Cmd::Bridge { harness } => {
             let exe: PathBuf = std::env::current_exe()?;
             mcpm_daemon::bridge::run_blocking(mcpm_daemon::bridge::BridgeOptions {
@@ -68,6 +63,7 @@ fn run(json: bool, cmd: Cmd) -> anyhow::Result<()> {
         Cmd::Servers { action } => commands::servers(json, action),
         Cmd::Autostart { state } => commands::autostart(json, state),
         Cmd::Uninstall => commands::uninstall(json),
+        Cmd::Update { check } => commands::update(json, check),
     }
 }
 

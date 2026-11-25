@@ -95,7 +95,9 @@ pub struct AppState {
     pub started_ms: u64,
     pub sessions: Mutex<HashMap<String, SessionInfo>>,
     /// Set by `POST /api/shutdown`; the daemon main loop waits on it.
-    pub shutdown_requested: Notify,
+    pub shutdown_requested: Arc<Notify>,
+    /// Self-update (None in tests and when switched off).
+    pub update: Option<Arc<crate::update::Service>>,
     /// `true` once the daemon is stopping: ends connections and SSE streams.
     pub stop: watch::Sender<bool>,
 }

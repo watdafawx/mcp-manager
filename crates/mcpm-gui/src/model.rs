@@ -19,6 +19,48 @@ pub struct Status {
     pub running_instances: usize,
     pub sessions: usize,
     pub home: String,
+    pub auto_update: bool,
+    /// Version of a newer release the daemon knows of.
+    pub update_available: Option<String>,
+}
+
+/// Version of this build (the window).
+pub const WINDOW_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// `1.2.3`, `v1.2.3` or `1.2.3-rc.1` -> (1, 2, 3).
+pub fn parse_version(s: &str) -> Option<(u64, u64, u64)> {
+    let core = s.trim().trim_start_matches('v');
+    let core = core.split(['-', '+']).next()?;
+    let mut it = core.split('.');
+    let v = (
+        it.next()?.parse().ok()?,
+        it.next()?.parse().ok()?,
+        it.next()?.parse().ok()?,
+    );
+    it.next().is_none().then_some(v)
+}
+
+/// How the daemon's version relates to the window's; `None` when either does not parse.
+pub fn compare_versions(window: &str, daemon: &str) -> Option<std::cmp::Ordering> {
+    Some(parse_version(daemon)?.cmp(&parse_version(window)?))
+}
+
+/// `GET /api/update`.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdateInfo {
+    pub current: String,
+    pub latest: Option<String>,
+    pub available: bool,
+    /// `idle`, `checking`, `downloading` or `installing`.
+    pub phase: String,
+    pub notes: Option<String>,
+    pub last_check: Option<String>,
+    pub last_error: Option<String>,
+    pub auto_update: bool,
+    pub downloaded: u64,
+    pub size: u64,
+    pub waiting_for_idle: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,6 +464,25 @@ pub fn format_uptime(secs: u64) -> String {
         0..=59 => format!("{secs}s"),
         60..=3599 => format!("{}m {}s", secs / 60, secs % 60),
         _ => format!("{}h {}m", secs / 3600, secs % 3600 / 60),
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    #[test]
+    fn versions_parse_and_compare() {
+        assert_eq!(parse_version("v1.2.3"), Some((1, 2, 3)));
+        assert_eq!(parse_version("0.10.0-rc.1"), Some((0, 10, 0)));
+        assert_eq!(parse_version("1.2"), None);
+        assert_eq!(parse_version("1.2.3.4"), None);
+        assert_eq!(parse_version("x.y.z"), None);
+        assert_eq!(compare_versions("0.2.0", "0.10.0"), Some(Ordering::Greater));
+        assert_eq!(compare_versions("0.2.0", "0.2.0"), Some(Ordering::Equal));
+        assert_eq!(compare_versions("0.2.1", "0.2.0"), Some(Ordering::Less));
+        assert_eq!(compare_versions("0.2.1", "dev"), None);
     }
 }
 

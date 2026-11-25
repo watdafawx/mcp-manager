@@ -4,7 +4,7 @@ use eframe::egui::{self, RichText, Ui};
 
 use crate::app::{App, modal};
 use crate::autostart;
-use crate::model::{HarnessState, format_uptime};
+use crate::model::{HarnessState, WINDOW_VERSION, format_uptime};
 use crate::state::ConnState;
 use crate::theme::{self, Palette};
 use crate::worker::Job;
@@ -110,6 +110,70 @@ pub fn show(app: &mut App, ui: &mut Ui, pal: &Palette) {
                 ui.label(RichText::new(format!("{v}{note}")).monospace().small().color(pal.muted));
             }
             ui.label(RichText::new("Per-user Run key, no admin rights.").small().color(pal.muted));
+        });
+
+        card(ui, "Updates", |ui| {
+            let update = app.data.update.clone();
+            egui::Grid::new("update_info").num_columns(2).spacing([14.0, 4.0]).show(ui, |ui| {
+                let row = |ui: &mut Ui, k: &str, v: String| {
+                    ui.label(RichText::new(k).color(pal.muted));
+                    ui.label(v);
+                    ui.end_row();
+                };
+                row(ui, "This window", WINDOW_VERSION.to_string());
+                if let Some(s) = &status {
+                    row(ui, "Daemon", s.version.clone());
+                }
+                if let Some(u) = &update {
+                    row(
+                        ui,
+                        "Latest release",
+                        u.latest.clone().unwrap_or_else(|| "not checked yet".into()),
+                    );
+                    row(ui, "Last check", u.last_check.clone().unwrap_or_else(|| "never".into()));
+                }
+            });
+            if let Some(e) = update.as_ref().and_then(|u| u.last_error.as_ref()) {
+                ui.label(RichText::new(format!("Last check failed: {e}")).small().color(pal.err));
+            }
+            let enabled = online && update.is_some();
+            let auto = status.as_ref().is_some_and(|s| s.auto_update);
+            let busy = update.as_ref().is_some_and(|u| u.phase != "idle");
+            ui.horizontal(|ui| {
+                if ui.add_enabled(enabled, egui::Button::new("Check now")).clicked() {
+                    jobs.push(Job::CheckUpdate);
+                }
+                if let Some(u) = update.as_ref().filter(|u| u.available)
+                    && let Some(v) = &u.latest
+                    && ui
+                        .add_enabled(enabled && !busy, egui::Button::new(format!("Install {v}")))
+                        .clicked()
+                {
+                    jobs.push(Job::InstallUpdate);
+                }
+                if busy {
+                    ui.spinner();
+                }
+            });
+            ui.horizontal(|ui| {
+                if enabled && theme::switch(ui, auto).clicked() {
+                    jobs.push(Job::SetAutoUpdate(!auto));
+                }
+                ui.label(if auto { "Install updates automatically" } else { "Ask first (tray and this page show the update)" });
+            });
+            if online && update.is_none() {
+                ui.label(
+                    RichText::new("Updates are off in this daemon (a development build, or MCPM_NO_UPDATE is set).")
+                        .small()
+                        .color(pal.muted),
+                );
+            } else {
+                ui.label(
+                    RichText::new("Checks every 6 hours. An automatic install waits until no tool call is running.")
+                        .small()
+                        .color(pal.muted),
+                );
+            }
         });
 
         card(ui, "Uninstall", |ui| {

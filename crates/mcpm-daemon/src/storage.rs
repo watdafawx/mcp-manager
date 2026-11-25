@@ -17,7 +17,6 @@ pub fn state_dir() -> PathBuf {
     core_context().state_dir
 }
 
-
 pub fn token_path(home: &Path) -> PathBuf {
     home.join("token")
 }
