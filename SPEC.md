@@ -36,6 +36,7 @@ Single exe. Built with `#![windows_subsystem = "windows"]`; CLI subcommands call
   - `snapshots/<snapshot-id>/manifest.json` + `files/<n>.bak` raw bytes.
   - `daemon.json`: `{ pid, port, startedAt }` written by the running daemon, removed on clean exit.
   - `logs/daemon.log` (rolling, max 2 x 1 MB).
+  - `updates/`: a downloaded `mcpm.exe` waiting to be installed; emptied on the next daemon start.
 - Default port **39494** on `127.0.0.1` only (the old relay uses 39393).
 
 ## Core types (`mcpm-core::model`)
@@ -51,7 +52,7 @@ pub struct ServerConfig {
     pub harnesses: Vec<String>,     // empty = exposed to every harness
     pub origin: Option<Origin>,     // where it was imported from (harness id, config path, entry name, scope)
 }
-pub struct ManagerConfig { pub version: u32, pub port: u16, pub servers: Vec<ServerConfig>, pub autostart: bool }
+pub struct ManagerConfig { pub version: u32, pub port: u16, pub servers: Vec<ServerConfig>, pub autostart: bool, pub auto_update: bool /* default true */ }
 ```
 
 Unlike the relay, taken-over servers are **copied** into `config.json` with their env/headers, because takeover removes them from the harness file.
@@ -111,10 +112,29 @@ Dry run (`plan_takeover`) returns the diff (entries to import, entries to remove
 - `mcpm bridge --harness <id>`: stdio <-> HTTP bridge for stdio-only harnesses; starts the daemon if not running.
 - Autostart: HKCU `Software\Microsoft\Windows\CurrentVersion\Run` value `mcpm` = `"<exe>" daemon`. No admin.
 - Single instance: if `daemon.json` points at a live pid answering `/api/status`, a second `mcpm daemon` exits 0.
+- `mcpm daemon --no-tray` skips the notification-area icon; `--wait-pid <pid>` (hidden, used by updates) waits for that process to exit before starting.
+
+### Tray icon
+
+The daemon owns a notification-area icon, on its own thread with a Win32 message loop (`Shell_NotifyIconW`, no extra crates). It is skipped with `--no-tray`, and when the session has no visible desktop (service, ssh). The icon is generated (`tools/gen_icon.py` -> `assets/`), embedded as the exe's icon resource and used for the window.
+
+- Tooltip and first menu line: `Running · N servers · port P`.
+- Menu: status line (disabled) · **Open MCP Manager** (focuses the open window, else starts `<exe> gui`) · **Restart all servers** · **Check for updates** · **Install update x.y.z** (only when one is known; "Updating to x.y.z…" while it runs) · **Start with Windows** (checkbox, the same Run key as `mcpm autostart`) · **Quit** (stops the daemon cleanly).
+- Double-click opens the window. The tooltip refreshes every 5 s; the icon comes back after an Explorer restart.
+
+### Self-update
+
+- Source: GitHub `releases/latest` of `watdafawx/mcp-manager` (no token, `User-Agent: mcpm/<version>`). Drafts and pre-releases are ignored. A release counts when its tag is a higher semver than the running version and it carries `mcpm.exe`.
+- Schedule: first check ~20 s after the daemon starts, then every 6 h. Setting `autoUpdate` (config, default `true`): on = install when no tool call is in flight; off = tray, window and `mcpm update --check` only report it.
+- Download to `<state>/updates/`; size and sha256 must match the release (`mcpm.exe.sha256` asset, else GitHub's `sha256:` digest). Without a checksum the update is refused.
+- Swap: the running exe is renamed to `mcpm.exe.old`, the new file moved in (a failure puts the old one back), a new `mcpm daemon --wait-pid <old pid>` is started with the same flags, the old daemon stops. The new daemon deletes `mcpm.exe.old` and `updates/` and restarts the child servers lazily (the old daemon's job object killed the old children).
+- A running window sees `/api/status` report a new version: banner "Updated to x.y.z" with a Restart window button. A daemon older than the window offers Restart daemon.
+- Development builds (exe under a cargo `target\debug|release` folder, or `MCPM_NO_UPDATE` set) never self-update. Hidden `MCPM_UPDATE_URL` replaces the GitHub API base for tests (docs/release.md).
+- Control API: `GET /api/update` (state: current, latest, available, phase, notes, lastCheck, lastError, autoUpdate, waitingForIdle) · `PUT /api/update {autoUpdate}` · `POST /api/update/check` · `POST /api/update/install` (starts it, returns at once). `501` when updates are off. `/api/status` also carries `autoUpdate` and `updateAvailable`.
 
 ## CLI (`mcpm`)
 
-`daemon` · `gui` (default when run with no args, e.g. double-click) · `status` · `harnesses` · `takeover [<harness>|--all] [--dry-run]` · `restore [<harness>|--all|--snapshot <id>]` · `snapshots` · `servers [list|add|remove|enable|disable]` · `bridge --harness <id>` · `autostart on|off` · `uninstall`.
+`daemon` · `gui` (default when run with no args, e.g. double-click) · `status` · `harnesses` · `takeover [<harness>|--all] [--dry-run]` · `restore [<harness>|--all|--snapshot <id>]` · `snapshots` · `servers [list|add|remove|enable|disable]` · `bridge --harness <id>` · `autostart on|off` · `update [--check]` · `uninstall`.
 
 ## GUI (egui)
 
@@ -122,7 +142,8 @@ Opens with `mcpm gui`; starts the daemon if needed; closing the window leaves th
 - **Servers**: one row per server: name, transport, status dot (idle/running/error), tool count, per-harness badges (click toggles exposure, like skills-manager), enable switch, restart. Detail pane: edit form (command/args/env with masked values, or url/headers), mode, pinned tools picker from the live tool list, recent calls.
 - **Harnesses**: one card per detected harness: config path, state (not connected / connected alongside / taken over), MCP entries found, buttons Take over (shows dry-run diff first) / Restore.
 - **Snapshots**: list, view diff vs current file, restore, delete.
-- **Settings**: port, autostart, open state dir, uninstall everything.
+- **Settings**: port, autostart, updates (versions, automatic toggle, Check now, Install, last check and error), open state dir, uninstall everything.
+A second `mcpm gui` brings the open window to the front instead of opening another.
 Theme: follow system dark/light, no hard-coded garish colours.
 
 ## Testing
@@ -138,5 +159,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --release -p mcpm      # target/release/mcpm.exe
 ```
+
+CI (`.github/workflows/ci.yml`) runs fmt, clippy and the tests on Windows, and the core tests on Linux. Releases: `docs/release.md`.
 
 Tests never touch real harness files: they run against temp dirs (`MCPM_HOME` plus a temp `Core { home, appdata, state_dir }`).

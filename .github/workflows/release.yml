@@ -1,0 +1,58 @@
+name: Release
+
+# Push a tag like v0.2.0 (matching the workspace version in Cargo.toml) to build MCP Manager
+# and publish mcpm.exe, a zip and a checksum as a GitHub release. Installed copies update
+# themselves from the latest release (see docs/release.md).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Full history: the release notes list the commits since the previous tag.
+        with:
+          fetch-depth: 0
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the tag matches Cargo.toml
+        shell: pwsh
+        run: |
+          $text = Get-Content Cargo.toml -Raw
+          if ($text -notmatch '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"') {
+            throw "no [workspace.package] version in Cargo.toml"
+          }
+          $v = $Matches[1]
+          if ("v$v" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} doesn't match Cargo.toml version $v"
+          }
+      - name: Build
+        run: cargo build --release --bin mcpm
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\mcpm.exe dist\mcpm.exe
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          Compress-Archive -Path dist\mcpm.exe -DestinationPath "dist\mcpm-$v-win64.zip"
+          # `<sha256>  mcpm.exe`: the installed copies verify their download against this.
+          $hash = (Get-FileHash dist\mcpm.exe -Algorithm SHA256).Hash.ToLower()
+          [System.IO.File]::WriteAllText("$PWD\dist\mcpm.exe.sha256", "$hash  mcpm.exe`n")
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ github.ref_name }}"
+          gh release view $v 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            ./scripts/release-notes.ps1 $v '${{ github.repository }}' | Set-Content -Encoding utf8 notes.md
+            gh release create $v --title "MCP Manager $($v.TrimStart('v'))" --notes-file notes.md
+          }
+          gh release upload $v dist\mcpm.exe "dist\mcpm-$($v.TrimStart('v'))-win64.zip" dist\mcpm.exe.sha256 --clobber
