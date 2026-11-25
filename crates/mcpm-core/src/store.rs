@@ -3,14 +3,14 @@ use crate::model::*;
 use anyhow::{Result, ensure};
 use std::{fs, io::Write, path::Path};
 
-pub(crate) fn restrict(path: &Path) -> Result<()> {
+/// Keeps an existing file's permissions when it is replaced (harness configs keep theirs;
+/// state files get the state dir's restricted ACL / mode from `secure::secure_dir`).
+fn keep_permissions(temp: &Path, target: &Path) -> Result<()> {
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    if let Ok(meta) = fs::metadata(target) {
+        fs::set_permissions(temp, meta.permissions())?;
     }
-    // TODO Windows: install a protected current-user-only DACL using Win32.
-    let _ = path;
+    let _ = (temp, target);
     Ok(())
 }
 
@@ -28,7 +28,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
             .write(true)
             .create_new(true)
             .open(&temp)?;
-        restrict(&temp)?;
+        keep_permissions(&temp, path)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
@@ -76,6 +76,7 @@ pub fn validate(config: &ManagerConfig) -> Result<()> {
 /// Validates and atomically persists manager configuration.
 pub fn save(state: &Path, config: &ManagerConfig) -> Result<()> {
     validate(config)?;
+    crate::secure::secure_dir(state)?;
     atomic_write(
         &state.join("config.json"),
         &serde_json::to_vec_pretty(config)?,

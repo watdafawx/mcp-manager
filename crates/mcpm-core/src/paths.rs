@@ -22,7 +22,7 @@ pub fn state_dir(home: &Path, appdata: &Path) -> PathBuf {
 
 /// Reads or securely creates a random 32-byte hexadecimal control token.
 pub fn token(state: &Path) -> Result<String> {
-    fs::create_dir_all(state)?;
+    crate::secure::secure_dir(state)?;
     let path = state.join("token");
     if !path.exists() {
         let mut bytes = [0u8; 32];
@@ -35,7 +35,6 @@ pub fn token(state: &Path) -> Result<String> {
             .open(&path)
         {
             Ok(mut f) => {
-                super::store::restrict(&path)?;
                 f.write_all(value.as_bytes())?;
                 f.sync_all()?;
             }

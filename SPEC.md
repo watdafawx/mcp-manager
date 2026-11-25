@@ -56,7 +56,7 @@ pub struct ManagerConfig { pub version: u32, pub port: u16, pub servers: Vec<Ser
 ```
 
 Unlike the relay, taken-over servers are **copied** into `config.json` with their env/headers, because takeover removes them from the harness file.
-`config.json` lives in the user profile; on Windows set its ACL to the current user only. Secrets are never logged and are masked (`••••`) in the GUI and in meta-tool output.
+The whole state dir (`config.json`, snapshots, token, logs) is locked to the current user: on Windows a protected DACL (current user + SYSTEM, inherited by everything inside), on Unix mode 0700. Harness config files keep their own permissions. Secrets are never logged and are masked (`••••`) in the GUI and in meta-tool output.
 
 ## Harnesses
 

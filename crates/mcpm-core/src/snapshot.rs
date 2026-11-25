@@ -47,6 +47,7 @@ pub fn create(state: &Path, operation: &str, files: &[SnapshotInput]) -> Result<
     getrandom::fill(&mut random).map_err(|e| anyhow::anyhow!("random snapshot: {e}"))?;
     let id = format!("{timestamp}-{:x}", u64::from_le_bytes(random));
     let dir = directory(state, &id)?;
+    crate::secure::secure_dir(state)?;
     fs::create_dir_all(dir.join("files"))?;
     let mut manifest = Snapshot {
         id,

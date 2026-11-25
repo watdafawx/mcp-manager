@@ -7,6 +7,7 @@ pub mod harness;
 pub mod model;
 pub mod paths;
 pub mod restore;
+pub mod secure;
 pub mod snapshot;
 pub mod store;
 pub mod takeover;
