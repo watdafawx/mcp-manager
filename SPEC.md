@@ -5,7 +5,7 @@ It installs itself as the only MCP entry in each harness, proxies the servers it
 and can put every harness config back exactly as it was.
 
 Successor of the `mcp-relay` T3 Patcher plugin. Reference implementation (Node, tested) to port from:
-`X:\Dev\T3-Patcher\plugins\mcp-relay\` (`discovery.cjs`, `autoconnect.cjs`, `relay-pool.cjs`,
+[`plugins/mcp-relay`](https://github.com/watdafawx/t3-patcher/tree/main/plugins/mcp-relay) (`discovery.cjs`, `autoconnect.cjs`, `relay-pool.cjs`,
 `relay-clients.cjs`, `relay-http.cjs`, tests in `test/`). Read them; keep their behaviour unless this spec says otherwise.
 UX inspiration: https://github.com/xingkongliang/skills-manager (one library, per-agent pages, badges per agent).
 
@@ -129,10 +129,14 @@ Theme: follow system dark/light, no hard-coded garish colours.
 
 - core: unit tests for every parser/editor (JSONC with comments and trailing commas, TOML tables, Claude projects map), takeover plan, restore both paths (exact and merged), dedupe. Use `MCPM_HOME` + temp dirs, never real user files. Port the cases in `plugins/mcp-relay/test/*.test.ts`.
 - daemon: integration test with a tiny fake stdio MCP server (a test bin in the crate) exercising list/call/pinned/reload/session isolation and the control API.
-- GUI: checked by hand on rig (see below).
+- GUI: checked by hand on a separate Windows machine.
 
-## Machine rules (for anyone building this)
+## Building
 
-- Local cargo: `pwsh -NoProfile -File X:\Dev\tools\cargo-ccd1.ps1 <args>`, never bare `cargo`.
-- Never open the GUI on this PC. GUI runs go to rig: `pwsh X:\Dev\tools\push-to-rig.ps1 -Project X:\Dev\mcp-manager -BuildOnRig -Exe mcpm -CargoArgs '-p','mcpm' -Launch -AppArgLine 'gui'`, then `-Stop -Slot N`.
-- Tests and builds run in the foreground; never touch the real harness files in tests.
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --release -p mcpm      # target/release/mcpm.exe
+```
+
+Tests never touch real harness files: they run against temp dirs (`MCPM_HOME` plus a temp `Core { home, appdata, state_dir }`).
