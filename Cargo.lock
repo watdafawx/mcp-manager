@@ -1343,7 +1343,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "mcpm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "mcpm-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "getrandom 0.3.4",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "mcpm-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1393,7 +1393,7 @@ dependencies = [
 
 [[package]]
 name = "mcpm-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "eframe",
