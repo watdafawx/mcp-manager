@@ -90,11 +90,58 @@ pub fn identity(t: &Transport) -> String {
         Transport::Stdio {
             command, args, cwd, ..
         } => format!(
-            "stdio|{command}|{}|{}",
+            "stdio|{}|{}|{}",
+            command_key(command),
             args.join("\0"),
             cwd.as_deref().unwrap_or("")
         ),
     }
+}
+/// Launcher name without directory, case or Windows shim extension, so `npx`,
+/// `npx.cmd` and `C:\...\npx.CMD` count as the same command.
+fn command_key(command: &str) -> String {
+    let base = command
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    for ext in [".cmd", ".exe", ".bat", ".ps1"] {
+        if let Some(stem) = base.strip_suffix(ext) {
+            return stem.to_string();
+        }
+    }
+    base
+}
+/// Folds servers with the same identity into the first one (harness exposure, pins and
+/// enabled state are combined). Returns true when anything was merged.
+pub fn dedupe(servers: &mut Vec<ServerConfig>) -> bool {
+    let before = servers.len();
+    let mut out: Vec<ServerConfig> = Vec::with_capacity(before);
+    for s in servers.drain(..) {
+        let key = identity(&s.transport);
+        if let Some(keep) = out.iter_mut().find(|k| identity(&k.transport) == key) {
+            if keep.harnesses.is_empty() || s.harnesses.is_empty() {
+                keep.harnesses.clear(); // empty = every harness
+            } else {
+                for h in s.harnesses {
+                    if !keep.harnesses.contains(&h) {
+                        keep.harnesses.push(h);
+                    }
+                }
+            }
+            for t in s.pinned_tools {
+                if !keep.pinned_tools.contains(&t) {
+                    keep.pinned_tools.push(t);
+                }
+            }
+            keep.enabled |= s.enabled;
+        } else {
+            out.push(s);
+        }
+    }
+    *servers = out;
+    servers.len() != before
 }
 /// Produces a unique valid identifier from a display name.
 pub fn sanitize_id(name: &str, taken: &[ServerConfig]) -> String {
@@ -205,6 +252,43 @@ pub fn discover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn stdio(id: &str, command: &str, harnesses: &[&str]) -> ServerConfig {
+        ServerConfig {
+            id: id.into(),
+            name: id.into(),
+            transport: Transport::Stdio {
+                command: command.into(),
+                args: vec!["-y".into(), "@browsermcp/mcp@latest".into()],
+                env: Default::default(),
+                cwd: None,
+            },
+            enabled: true,
+            mode: InstanceMode::Shared,
+            pinned_tools: vec![],
+            harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
+            origin: None,
+        }
+    }
+    #[test]
+    fn npx_shims_are_one_server() {
+        let a = stdio("browsermcp", "npx.cmd", &["claude", "codex"]);
+        let mut b = stdio("browsermcp-2", "npx", &["opencode"]);
+        b.pinned_tools = vec!["browser".into()];
+        let c = stdio("other", r"C:\Program Files\nodejs\NPX.CMD", &["cursor"]);
+        assert_eq!(identity(&a.transport), identity(&b.transport));
+        assert_eq!(identity(&a.transport), identity(&c.transport));
+        let mut list = vec![a, b, c, stdio("uvx", "uvx", &["claude"])];
+        assert!(dedupe(&mut list));
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "browsermcp");
+        assert_eq!(list[0].harnesses, ["claude", "codex", "opencode", "cursor"]);
+        assert_eq!(list[0].pinned_tools, ["browser"]);
+        assert!(!dedupe(&mut list));
+        // Merging into a server exposed everywhere keeps it exposed everywhere.
+        let mut list = vec![stdio("a", "npx", &[]), stdio("b", "npx.cmd", &["codex"])];
+        assert!(dedupe(&mut list));
+        assert!(list[0].harnesses.is_empty());
+    }
     #[test]
     fn expansion() {
         let env = BTreeMap::from([("PRESENT".into(), "yes".into())]);

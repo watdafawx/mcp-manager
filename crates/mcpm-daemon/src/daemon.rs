@@ -128,7 +128,12 @@ impl RunningDaemon {
         } else {
             Logger::null()
         });
-        let cfg = storage::load_config(&opts.home).context("load config.json")?;
+        let mut cfg = storage::load_config(&opts.home).context("load config.json")?;
+        // Imports from 0.1.0 could hold the same server twice (`npx` vs `npx.cmd`).
+        if mcpm_core::discovery::dedupe(&mut cfg.servers) {
+            storage::save_config(&opts.home, &cfg).context("save deduplicated config.json")?;
+            log.info("merged duplicate servers in config.json");
+        }
         let port = opts.port.unwrap_or(cfg.port);
         let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await {
             Ok(l) => l,

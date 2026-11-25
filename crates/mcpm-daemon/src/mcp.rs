@@ -343,7 +343,7 @@ async fn tool_call(st: &Arc<AppState>, params: &Value, ctx: &Ctx) -> Value {
                 let (server, tool) = (&other[..i], &other[i + 2..]);
                 if let Some(cfg) = pool.server(server)
                     && cfg.is_exposed_to(harness)
-                    && cfg.pinned_tools.iter().any(|t| t == tool)
+                    && cfg.pins(tool)
                 {
                     return match pool.call_tool(server, tool, args, session, harness).await {
                         Ok(v) => v,

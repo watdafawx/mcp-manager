@@ -809,7 +809,17 @@ impl Pool {
         let mut out = Vec::new();
         for s in wanted {
             let known = self.cached_tools(s, session);
-            for tool in &s.pinned_tools {
+            let names: Vec<String> = if s.pins_all() {
+                known
+                    .iter()
+                    .flat_map(|k| k.iter())
+                    .filter_map(|t| t.get("name").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect()
+            } else {
+                s.pinned_tools.clone()
+            };
+            for tool in &names {
                 let m = known.as_ref().and_then(|k| {
                     k.iter()
                         .find(|t| t.get("name").and_then(Value::as_str) == Some(tool))

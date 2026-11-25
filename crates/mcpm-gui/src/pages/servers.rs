@@ -356,8 +356,24 @@ fn edit_pane(app: &mut App, ui: &mut Ui, pal: &Palette) {
         .small()
         .color(pal.muted),
     );
-    let tools = app.data.tools.get(&id).cloned();
+    let mut all = form.pinned.iter().any(|p| p == mcpm_core::model::PIN_ALL);
+    if ui
+        .checkbox(&mut all, "Expose all tools directly")
+        .on_hover_text(
+            "Every tool of this server shows up as <server>__<tool>, including tools added later.",
+        )
+        .changed()
+    {
+        if all {
+            form.pinned = vec![mcpm_core::model::PIN_ALL.to_string()];
+        } else {
+            form.pinned.clear();
+        }
+    }
+    // Individual picks are moot while everything is exposed: hide the picker.
+    let tools = app.data.tools.get(&id).cloned().filter(|_| !all);
     match tools {
+        None if all => {}
         None => {
             if ui.button("Load tools (starts the server)").clicked() {
                 loading_tools = true;
@@ -534,7 +550,7 @@ fn pinned_leftovers(ui: &mut Ui, form: &mut ServerForm, live: &[String]) {
     let missing: Vec<String> = form
         .pinned
         .iter()
-        .filter(|p| !live.contains(p))
+        .filter(|p| !live.contains(p) && p.as_str() != mcpm_core::model::PIN_ALL)
         .cloned()
         .collect();
     for name in missing {

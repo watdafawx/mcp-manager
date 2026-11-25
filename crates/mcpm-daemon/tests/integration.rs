@@ -350,6 +350,30 @@ async fn pinned_tools_are_exposed_and_callable() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pin_all_exposes_every_tool() {
+    let rig = Rig::start().await;
+    let mut cfg = fake("gh", InstanceMode::Shared);
+    cfg.pinned_tools = vec![mcpm_core::model::PIN_ALL.into()];
+    rig.daemon().pool().add_server(cfg).unwrap();
+
+    let sid = rig.init("/mcp/codex").await;
+    let n = names(&rig.tools_list("/mcp/codex", &sid).await);
+    assert!(
+        n.contains(&"gh__echo".to_string()) && n.contains(&"gh__pid".to_string()),
+        "{n:?}"
+    );
+    assert!(!n.iter().any(|t| t == "gh__*"), "{n:?}");
+    let res = rig
+        .tool("/mcp/codex", &sid, "gh__echo", json!({ "text": "all" }))
+        .await;
+    assert_eq!(payload(&res)["echo"], "all");
+    assert!(!is_error(
+        &rig.tool("/mcp/codex", &sid, "gh__pid", json!({})).await
+    ));
+    rig.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crash_restarts_on_next_call_and_reload_works() {
     let rig = Rig::start().await;
     rig.daemon()

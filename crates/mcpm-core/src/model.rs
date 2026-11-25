@@ -8,6 +8,8 @@ pub const DEFAULT_PORT: u16 = 39494;
 pub const MANAGER_ENTRY: &str = "mcpm";
 /// Entry written by the old T3 Patcher `mcp-relay` plugin; never imported.
 pub const LEGACY_RELAY_ENTRY: &str = "t3-relay";
+/// `pinned_tools` entry that exposes every tool of a server directly.
+pub const PIN_ALL: &str = "*";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +57,16 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    /// True when every tool of this server is exposed directly (`pinned_tools` holds `*`).
+    pub fn pins_all(&self) -> bool {
+        self.pinned_tools.iter().any(|t| t == PIN_ALL)
+    }
+
+    /// True when `tool` is exposed directly as `<id>__<tool>`.
+    pub fn pins(&self, tool: &str) -> bool {
+        self.pinned_tools.iter().any(|t| t == PIN_ALL || t == tool)
+    }
+
     pub fn is_exposed_to(&self, harness: Option<&str>) -> bool {
         if !self.enabled {
             return false;
@@ -150,6 +162,26 @@ mod tests {
                 .unwrap()
                 .auto_update
         );
+    }
+
+    #[test]
+    fn pins() {
+        let mut s = ServerConfig {
+            id: "x".into(),
+            name: "x".into(),
+            transport: Transport::Http {
+                url: "http://h".into(),
+                headers: Default::default(),
+            },
+            enabled: true,
+            mode: InstanceMode::Shared,
+            pinned_tools: vec!["a".into()],
+            harnesses: vec![],
+            origin: None,
+        };
+        assert!(s.pins("a") && !s.pins("b") && !s.pins_all());
+        s.pinned_tools = vec![PIN_ALL.into()];
+        assert!(s.pins("a") && s.pins("b") && s.pins_all());
     }
 
     #[test]
