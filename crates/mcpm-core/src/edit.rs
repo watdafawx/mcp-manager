@@ -180,33 +180,36 @@ pub fn set(text: &str, file: &HarnessFile, name: &str, value: Option<&Value>) ->
     }
     let source = if text.trim().is_empty() { "{}" } else { text };
     let b = mask(source)?;
-    let (root, root_end) = members(&b, ws(&b, 0))?;
+    let root_start = ws(&b, 0);
+    let (root, root_end) = members(&b, root_start)?;
+    let mut out = source.to_string();
     let Some(container) = root.iter().find(|m| m.key == file.container) else {
         if value.is_none() {
             return Ok(source.into());
         }
-        let v = json!({name:value});
-        let property = format!(
-            "{}: {}",
-            serde_json::to_string(&file.container)?,
-            serde_json::to_string(&v)?
-        );
-        let prefix = if root.last().is_some_and(|m| m.comma.is_none()) {
-            ","
-        } else {
-            ""
-        };
-        let mut out = source.to_string();
-        out.insert_str(root_end, &format!("{prefix}\n{property}\n"));
+        let v = json!({ name: value });
+        insert_member(&mut out, &root, root_start, root_end, &file.container, &v)?;
+        read(&out, file.format)?;
         return Ok(out);
     };
     let (items, end) = members(&b, container.value)?;
-    let mut out = source.to_string();
     if let Some((index, item)) = items.iter().enumerate().find(|(_, m)| m.key == name) {
         if let Some(v) = value {
-            out.replace_range(item.value..item.end, &serde_json::to_string(v)?);
+            let indent = line_indent(source, item.start).unwrap_or_default();
+            out.replace_range(item.value..item.end, &pretty(v, &indent)?);
         } else {
-            out.replace_range(item.start..item.comma.map_or(item.end, |c| c + 1), "");
+            let mut start = item.start;
+            let mut stop = item.comma.map_or(item.end, |c| c + 1);
+            // Drop the whole line when the entry sat on lines of its own.
+            if line_indent(source, item.start).is_some() {
+                let rest = &source[stop..];
+                let eol = rest.find('\n');
+                if eol.is_some_and(|n| rest[..n].trim().is_empty()) {
+                    start = source[..item.start].rfind('\n').map_or(start, |n| n + 1);
+                    stop += eol.unwrap_or(0) + 1;
+                }
+            }
+            out.replace_range(start..stop, "");
             if item.comma.is_none()
                 && index > 0
                 && let Some(comma) = items[index - 1].comma
@@ -215,22 +218,55 @@ pub fn set(text: &str, file: &HarnessFile, name: &str, value: Option<&Value>) ->
             }
         }
     } else if let Some(v) = value {
-        let prefix = if items.last().is_some_and(|m| m.comma.is_none()) {
-            ","
-        } else {
-            ""
-        };
-        out.insert_str(
-            end,
-            &format!(
-                "{prefix}\n{}: {}\n",
-                serde_json::to_string(name)?,
-                serde_json::to_string(v)?
-            ),
-        );
+        insert_member(&mut out, &items, container.value, end, name, v)?;
     }
     read(&out, file.format)?;
     Ok(out)
+}
+
+/// Whitespace before `pos` on its line, or `None` if other text precedes it there.
+fn line_indent(text: &str, pos: usize) -> Option<String> {
+    let line_start = text[..pos].rfind('\n').map_or(0, |n| n + 1);
+    let lead = &text[line_start..pos];
+    (lead.trim().is_empty() && line_start > 0).then(|| lead.to_string())
+}
+
+/// Pretty JSON whose continuation lines start at `indent`.
+fn pretty(v: &Value, indent: &str) -> Result<String> {
+    Ok(serde_json::to_string_pretty(v)?.replace('\n', &format!("\n{indent}")))
+}
+
+/// Appends `"key": value` to the object spanning `open..close`, matching sibling indentation.
+fn insert_member(
+    out: &mut String,
+    items: &[Member],
+    open: usize,
+    close: usize,
+    key: &str,
+    v: &Value,
+) -> Result<()> {
+    let key = serde_json::to_string(key)?;
+    if let Some(last) = items.last() {
+        let own_line = line_indent(out, last.start);
+        let sep = if own_line.is_some() { "\n" } else { " " };
+        let indent = own_line.unwrap_or_default();
+        let comma = if last.comma.is_none() { "," } else { "" };
+        let at = last.comma.map_or(last.end, |c| c + 1);
+        out.insert_str(at, &format!("{comma}{sep}{indent}{key}: {}", pretty(v, &indent)?));
+    } else {
+        let outer = line_indent(out, open).unwrap_or_else(|| {
+            let ls = out[..open].rfind('\n').map_or(0, |n| n + 1);
+            out[ls..].chars().take_while(|c| *c == ' ' || *c == '\t').collect()
+        });
+        let indent = format!("{outer}  ");
+        let member = format!("\n{indent}{key}: {}\n{outer}", pretty(v, &indent)?);
+        if out[open + 1..close].trim().is_empty() {
+            out.replace_range(open + 1..close, &member);
+        } else {
+            out.insert_str(close, &member); // keep comments inside an otherwise empty object
+        }
+    }
+    Ok(())
 }
 /// Builds the harness-specific manager entry.
 pub fn manager_entry(harness: &str, port: u16, exe: &std::path::Path) -> Value {
@@ -260,5 +296,31 @@ mod tests {
         assert!(entries(&next, &f).unwrap().is_empty());
         let next = set(&next, &f, "mcpm", Some(&json!({"url":"http://a"}))).unwrap();
         assert_eq!(entries(&next, &f).unwrap().len(), 1);
+    }
+    #[test]
+    fn keeps_indentation() {
+        let d = tempfile::tempdir().unwrap();
+        let f = crate::harness::registry(d.path(), d.path())
+            .remove(3)
+            .files
+            .remove(0);
+        let s = "{\n  \"mcp\": {\n    \"a\": { \"command\": [\"node\"] },\n    \"b\": { \"command\": [\"x\"] }\n  },\n  \"other\": 2\n}\n";
+        let removed = set(s, &f, "a", None).unwrap();
+        assert_eq!(
+            removed,
+            "{\n  \"mcp\": {\n    \"b\": { \"command\": [\"x\"] }\n  },\n  \"other\": 2\n}\n"
+        );
+        let added = set(&removed, &f, "mcpm", Some(&json!({"url": "http://a"}))).unwrap();
+        assert!(
+            added.contains("\n    \"mcpm\": {\n      \"url\": \"http://a\"\n    }\n  },"),
+            "{added}"
+        );
+        let gone = set(&set(&added, &f, "b", None).unwrap(), &f, "mcpm", None).unwrap();
+        assert_eq!(entries(&gone, &f).unwrap().len(), 0);
+        let fresh = set("{\n  \"mcp\": {}\n}\n", &f, "mcpm", Some(&json!({"url": "u"}))).unwrap();
+        assert_eq!(
+            fresh,
+            "{\n  \"mcp\": {\n    \"mcpm\": {\n      \"url\": \"u\"\n    }\n  }\n}\n"
+        );
     }
 }
